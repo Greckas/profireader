@@ -271,6 +271,8 @@ class User(Base, UserMixin, PRBase):
 
     def validate(self, is_new):
         ret = super().validate(is_new)
+        if (self.omit_validation):
+            return ret
         if not re.match(r'[^\s]{3}', str(self.profireader_name)):
             ret['errors']['profireader_name'] = 'Your username must be at least 3 characters long.'
         if not re.match(r'[^\s]{3}', str(self.profireader_first_name)):
