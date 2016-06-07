@@ -39,7 +39,7 @@ class Company(Base, PRBase):
             'none': nologo_url,
             'crop': True,
             'image_size': [450, 450],
-            'min_size': [120, 120],
+            'min_size': [100, 100],
             'aspect_ratio': [0.25, 4.0],
             'preset_urls': {},
             'no_selection_url': nologo_url
@@ -311,8 +311,8 @@ class Company(Base, PRBase):
                 #         sub_query = sub_query.join(Company, Portal.company_owner_id == Company.id)
                 #         list_filters.append({'type': 'text', 'value': filters['company'], 'field': Company.name})
         sub_query = sub_query.join(MemberCompanyPortal.company)
-        list_sorts.append({'value': 'desc', 'field': Company.name})
-        sub_query = Grid.subquery_grid(sub_query, filters=list_filters, sorts=list_sorts)
+        # list_sorts.append({'value': 'desc', 'field': Company.name})
+        sub_query = Grid.subquery_grid(sub_query, filters=list_filters)
         return sub_query
 
     @staticmethod

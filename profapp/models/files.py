@@ -33,8 +33,7 @@ class File(Base, PRBase):
     # youtube_id = Column(TABLE_TYPES['id_profireader'], ForeignKey('file.id'))
 
     company_id = Column(TABLE_TYPES['id_profireader'],
-                        ForeignKey('company.id'),
-                        nullable=False)
+                        ForeignKey('company.id'))
     article_portal_division_id = Column(TABLE_TYPES['id_profireader'],
                                         ForeignKey('article_portal_division.id'))
     copyright_author_name = Column(TABLE_TYPES['name'],
@@ -43,35 +42,32 @@ class File(Base, PRBase):
     ac_count = Column(Integer, default=0, nullable=False)
     size = Column(Integer, default=0, nullable=False)
     author_user_id = Column(TABLE_TYPES['id_profireader'],
-                            ForeignKey('user.id'),
-                            nullable=False)
+                            ForeignKey('user.id'))
     cr_tm = Column(TABLE_TYPES['timestamp'], nullable=False)
     md_tm = Column(TABLE_TYPES['timestamp'], nullable=False)
     ac_tm = Column(TABLE_TYPES['timestamp'], nullable=False)
 
     UniqueConstraint('name', 'parent_id', name='unique_name_in_folder')
-    thumbnail_id = Column(TABLE_TYPES['id_profireader'], ForeignKey('file.id'))
 
     file_content = relationship('FileContent', uselist=False, foreign_keys='FileContent.id',
                                 cascade="save-update, merge, delete")
 
-    thumbnail = relationship('File', uselist=True, foreign_keys='File.thumbnail_id')
+    youtube_video = relationship('YoutubeVideo', uselist=False, foreign_keys='YoutubeVideo.id',
+                                cascade="save-update, merge, delete")
+
 
     owner = relationship('User',
                          backref=backref('files', lazy='dynamic'),
-                         foreign_keys='File.author_user_id',
-                         cascade='save-update,delete')
+                         foreign_keys='File.author_user_id')
 
     def __init__(self, parent_id=None, name=None, mime='text/plain', size=0,
                  cr_tm=None, md_tm=None, ac_tm=None,
                  root_folder_id=None,
                  # youtube_id=None,
-                 company_id=None, copyright_author_name=None, author_user_id=None, image_croped=None,
-                 thumbnail_id=None):
+                 company_id=None, copyright_author_name=None, author_user_id=None, image_croped=None):
         super(File, self).__init__()
         self.parent_id = parent_id
         self.name = name
-        self.thumbnail_id = thumbnail_id
         self.mime = mime
         self.size = size
         self.cr_tm = cr_tm
@@ -158,10 +154,9 @@ class File(Base, PRBase):
         return rel_sort + sort
 
     @staticmethod
-    def search(name, folder_id, actions, file_manager_called_for=''):
+    def search(name, folder_id, rights_object, file_manager_called_for='', ):
         if name == None:
             return None
-        actions['paste'] = lambda file: None
         name = name.lower()
         all_files = File.get_all_in_dir_rev(folder_id)[::-1]
         sort_dirs = []
@@ -182,7 +177,7 @@ class File(Base, PRBase):
                     'path_to': File.path(file),
                     'author_name': file.copyright_author_name,
                     'description': file.description,
-                    'actions': {action: actions[action](file) for action in actions},
+                    'actions': rights_object.actions(file, file_manager_called_for),
                     }
                    for file in s if file.mime != 'image/thumbnail')
         return ret
@@ -190,42 +185,13 @@ class File(Base, PRBase):
     @staticmethod
     def list(parent_id=None, file_manager_called_for='', name=None, company_id=None):
         from ..models.rights import FilemanagerRights
-        rights_object = FilemanagerRights(company=company_id)
         folder = File.get(parent_id)
-        show = lambda: True if rights_object.is_action_allowed(FilemanagerRights.ACTIONS['SHOW']) else False
-        actions = {}
-        default_actions = {}
-        default_actions['download'] = lambda file: None if (
-            (file.mime == 'directory') or (file.mime == 'root')) else True
-        if file_manager_called_for == 'file_browse_image':
-            default_actions['choose'] = lambda file: False if None == re.search('^image/.*', file.mime) else True
-            actions['choose'] = lambda file: False if None == re.search('^image/.*', file.mime) else True.bit_length()
-        elif file_manager_called_for == 'file_browse_media':
-            default_actions['choose'] = lambda file: False if None == re.search('^video/.*', file.mime) else True
-            actions['choose'] = lambda file: False if None == re.search('^video/.*', file.mime) else True
-        elif file_manager_called_for == 'file_browse_file':
-            default_actions['choose'] = lambda file: True
-            actions['choose'] = lambda file: True
-        actions = {act: default_actions[act] for act in default_actions}
-        actions['remove'] = lambda file: None if file.mime == "root" else rights_object.is_action_allowed(FilemanagerRights.ACTIONS['REMOVE'])
-        actions['copy'] = lambda file: None if file.mime == "root" else True
-        actions['paste'] = lambda file: None if file == None else rights_object.is_action_allowed(FilemanagerRights.ACTIONS['UPLOAD'])
-        actions['cut'] = lambda file: None if file.mime == "root" else rights_object.is_action_allowed(FilemanagerRights.ACTIONS['CUT']) \
-                                                                       and rights_object.is_action_allowed(FilemanagerRights.ACTIONS['UPLOAD'])
-        actions['properties'] = lambda file: None if file.mime == "root" else rights_object.is_action_allowed(FilemanagerRights.ACTIONS['UPLOAD'])
+        rights_object = FilemanagerRights(company=company_id)
+        search_files = File.search(name, parent_id, rights_object, file_manager_called_for)
 
-        search_files = File.search(name, parent_id, actions, file_manager_called_for)
         if search_files != None:
             ret = search_files
         else:
-            # start = clock()
-            # [file for file in db(File, parent_id=parent_id)]
-            # end = clock()
-            # print(end-start)
-            # ss = clock()
-            # g.db.execute(("SELECT * FROM file WHERE parent_id='{}'").format(parent_id))
-            # ee = clock()
-            # print(ee - ss)
             ret = [{'size': file.size, 'name': file.name, 'id': file.id,
                         'parent_id': file.parent_id, 'type': File.type(file),
                         'date': str(file.md_tm),
@@ -236,16 +202,17 @@ class File(Base, PRBase):
                         'path_to': File.path(file),
                         'author_name': file.copyright_author_name,
                         'description': file.description,
-                        'actions': {action: actions[action](file) for action in actions},
-                        }for file in db(File, parent_id=parent_id) if show() and
-                       file.mime != 'image/thumbnail']
+                        'actions': rights_object.actions(file, file_manager_called_for),
+                        }for file in db(File, parent_id=parent_id)
+                            if rights_object.action_is_allowed(rights_object.ACTIONS['SHOW'])
+                            and file.mime != 'image/thumbnail']
             ret.append({'id': folder.id, 'parent_id': folder.parent_id,
                         'type': 'parent',
                         'date': str(folder.md_tm).split('.')[0],
                         'url': folder.url(),
                         'author_name': folder.copyright_author_name,
                         'description': folder.description,
-                        'actions': {action: actions[action](folder) for action in actions},
+                        'actions': rights_object.actions(folder, file_manager_called_for),
                         })
         return ret
 
@@ -262,6 +229,7 @@ class File(Base, PRBase):
                                      name=self.name + '_thumbnail_{str_size}'.format(
                                              str_size=str_size),
                                      parent_id=self.parent_id,
+                                     author_user_id=self.author_user_id,
                                      root_folder_id=self.root_folder_id,
                                      company_id=self.company_id,
                                      mime=self.mime.split('/')[0] + '/thumbnail').save()
@@ -326,8 +294,10 @@ class File(Base, PRBase):
         return path
 
     def url(self, id=None):
-        server = re.sub(r'^[^-]*-[^-]*-4([^-]*)-.*$', r'\1', id if id else self.id)
-        return '//file' + server + '.profireader.com/' + id if id else self.id + '/'
+        ID = id if id else self.id
+        server = re.sub(r'^[^-]*-[^-]*-4([^-]*)-.*$', r'\1', ID)
+
+        return '//file' + server + '.profireader.com/' + ID + '/'
 
     @staticmethod
     def get_all_in_dir_rev(id):
@@ -472,10 +442,14 @@ class File(Base, PRBase):
             File.save_files(files, dir.id, attr)
 
     @staticmethod
-    def uploadLogo(content, name, type, directory, root=None):
+    def uploadLogo(content, name, type, directory, author=None):
         file = File(parent_id=directory,
-                    root_folder_id=root if root else directory,
+                    root_folder_id=directory,
                     mime=type)
+        if 'User' in author:
+            file.author_user_id = author['User'].id
+        if 'Company' in author:
+            file.company_id = author['Company'].id
         try:
             file.name = File.get_unique_name(urllib.parse.unquote(name).replace(
                     '"', '_').replace('*', '_').replace('/', '_').replace('\\', '_'), type, directory)
@@ -602,12 +576,14 @@ class File(Base, PRBase):
             File.update_all(self.id, attr)
         return self.id
 
-    def create_cropped_image(self, bytes_file, area, coordinates, zoom, folder_id):
+    def create_cropped_image(self, bytes_file, folder_id):
         croped = File()
         croped.md_tm = strftime("%Y-%m-%d %H:%M:%S", gmtime())
         croped.size = sys.getsizeof(
                 bytes_file.getvalue())
         croped.name = self.name + '_cropped'
+        croped.author_user_id = self.author_user_id
+        croped.company_id = self.company_id
         croped.parent_id = folder_id
         croped.root_folder_id = folder_id
         croped.mime = self.mime
@@ -647,37 +623,20 @@ class File(Base, PRBase):
         bytes_file, area = self.crop_with_coordinates(coordinates, params)
         if bytes_file:
             if old_image_cropped:
-                return self.update_croped_image(old_image_cropped, coordinates, bytes_file, area, folder_id).id
-            else:
-                new_cropped_image = self.create_cropped_image(bytes_file, area, coordinates, coordinates['zoom'], folder_id)
-                ImageCroped(original_image_id=self.id,
-                            croped_image_id=new_cropped_image.id,
-                            x=float(round(area[0], 6)), y=float(round(area[1], 6)),
-                            width=float(area[2]-area[0]), height=float(area[3]-area[1]),
-                            croped_width=float(area[4]),
-                            croped_height=float(area[5]),
-                            origin_x=float(coordinates['origin_x']),
-                            origin_y=float(coordinates['origin_y']),
-                            zoom=coordinates['zoom']).save()
-                return new_cropped_image.id
+                db(File, id=old_image_cropped.croped_image_id).first().delete()
+            new_cropped_image = self.create_cropped_image(bytes_file, folder_id)
+            ImageCroped(original_image_id=self.id,
+                        croped_image_id=new_cropped_image.id,
+                        x=float(round(area[0], 6)), y=float(round(area[1], 6)),
+                        width=float(area[2]-area[0]), height=float(area[3]-area[1]),
+                        croped_width=float(area[4]),
+                        croped_height=float(area[5]),
+                        origin_x=float(coordinates['origin_x']),
+                        origin_y=float(coordinates['origin_y']),
+                        zoom=coordinates['zoom']).save()
+            return new_cropped_image.id
         else:
             return self.id
-
-    def update_croped_image(self, old_image_cropped, coordinates ,bytes_file, area, folder_id):
-        # old_image = old_image_cropped.croped_image_id
-        new_cropped_image = self.create_cropped_image(bytes_file, area, coordinates, coordinates['zoom'], folder_id)
-        old_image_cropped.croped_image_id = new_cropped_image.id
-        old_image_cropped.x = float(round(area[0], 6))
-        old_image_cropped.y = float(round(area[1], 6))
-        old_image_cropped.origin_x = float(coordinates['origin_x'])
-        old_image_cropped.origin_y = float(coordinates['origin_y'])
-        old_image_cropped.width = float(area[2]-area[0])
-        old_image_cropped.height = float(area[3]-area[1])
-        old_image_cropped.croped_width = float(area[4])
-        old_image_cropped.croped_height = float(area[5])
-        old_image_cropped.zoom = coordinates['zoom']
-        # File.get(old_image).delete()
-        return new_cropped_image.save()
 
     @staticmethod
     def get_correct_coordinates(left, top, right, bottom, column_data):
@@ -741,39 +700,6 @@ class FileContent(Base, PRBase):
         self.file = file
         self.content = content
 
-        # file.save(os.path.join(root, filename))
-        # for tmp_file in os.listdir(root):
-        #     st = os.stat(root+'/'+filename)
-        #     file_db.name = filename
-        #     file_db.md_tm = time.ctime(os.path.getmtime(root+'/'+filename))
-        #     file_db.ac_tm = time.ctime(os.path.getctime(root+'/'+filename))
-        #     file_db.cr_tm = strftime("%Y-%m-%d %H:%M:%S", gmtime())
-        #     file_db.size = st[ST_SIZE]
-        #     if os.path.isfile(root+'/'+tmp_file):
-        #         file_db.mime = 'file'
-        #     els# e:
-        #         file_db.mime = 'dir'
-
-        #
-        # binary_out.close# ()
-        # if os.path.isfile(root+'/'+filename):
-        #     os.remove(root+'/'+filename)
-        # else:
-        #     os.removedirs(root+'/'+filename)
-        # g.db.add(file_db)
-        # try:
-        #     g.db.commit()
-        # except PermissionError:
-        #     result = {"result":  {
-        #             "success": False,
-        #             "error": "Access denied to remove file"}
-        #          }
-        #     g.db.rollback()
-        #
-        # return result
-        # return True
-
-
 class ImageCroped(Base, PRBase):
     __tablename__ = 'image_croped'
     id = Column(TABLE_TYPES['id_profireader'], nullable=False, unique=True, primary_key=True)
@@ -820,8 +746,8 @@ class ImageCroped(Base, PRBase):
         left, top, right, bottom = File.get_correct_coordinates(coordinates['x'], coordinates['y'], (coordinates['x'] + coordinates['width']),
                                                            (coordinates['y'] + coordinates['height']), column_data)
         if (round(self.x) == round(left)) and round(self.y) == round(top) \
-                and (int(right-left) == self.croped_width and int(bottom-top)
-                    == self.croped_height):
+                and (round(right-left) == self.width and round(bottom-top)
+                    == self.height):
             return True
         else:
             return False
@@ -1035,8 +961,7 @@ class YoutubeVideo(Base, PRBase):
     playlist = relationship('YoutubePlaylist', uselist=False)
     file = relationship('File',
                         uselist=False,
-                        backref=backref('youtube_video', uselist=False),
-                        cascade='save-update,delete')
+                        back_populates='youtube_video')
 
     def __init__(self, file=None, title='Title', authorization=None, size=None, user_id=None, video_id=None,
                  status='uploading', playlist_id=None, playlist=None):
@@ -1160,3 +1085,23 @@ class YoutubePlaylist(Base, PRBase):
         playlist.save()
         video.playlist = playlist
         return playlist
+
+    def check(self, what_to_check):
+        ret = {}
+        for k in what_to_check:
+            if k == 'company_id':
+                ret[k] = []
+                # check company
+                ret[k].append('guess_from_parent')
+                ret[k].append('delete')
+
+            if k == 'size':
+                ret[k] = []
+                # check company
+                ret[k].append('resize')
+                ret[k].append('delete')
+
+        pass
+
+    def repair(self, what_to_do, what_to_check):
+        return self.check(what_to_check)

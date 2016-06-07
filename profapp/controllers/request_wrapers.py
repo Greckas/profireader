@@ -32,10 +32,13 @@ def function_profiler(func):
     def wrapper(*args, **kwargs):
 
         if g.debug or g.testing:
-            if not '__check_rights__' in func.__dict__ and not func.__dict__['__check_rights__']:
+            if not func.__dict__.get('__check_rights__'):
                 print('Please add "check_right" decorator for your func!')
             start = time.clock()
-            ret = func(*args, **kwargs)
+            try:
+                ret = func(*args, **kwargs)
+            except:
+                return redirect(url_for('general.index'))
             end = time.clock()
             profiler = db(Profiler, name=func.__name__, blueprint_name=func.__dict__['__endpoint__']).first()
             method = ','.join([method for method in func.__dict__['__method__']]) if func.__dict__['__method__'] else None
@@ -47,7 +50,11 @@ def function_profiler(func):
         else:
             if not func.__dict__['__check_rights__']:
                 raise Exception('method not allowed! Please add "check_right" decorator for your func!')
-        return func(*args, **kwargs)
+            try:
+                ret = func(*args, **kwargs)
+            except:
+                return redirect(url_for('general.index'))
+        return ret
     return wrapper
 
 
@@ -121,9 +128,10 @@ def check_right(classCheck, params=None, action=None):
             if not params:
                 allow = classCheck().is_allowed()
             else:
+                set_attrs = [params] if isinstance(params, str) else params
                 instance = classCheck()
                 check = True
-                for param in params:
+                for param in set_attrs:
                     if param in kwargs and kwargs[param]:
                         setattr(instance, param, kwargs[param])
                     else:
