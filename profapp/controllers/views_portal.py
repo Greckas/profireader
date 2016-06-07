@@ -6,7 +6,7 @@ from ..models.portal import PortalDivisionType
 from ..models.translate import TranslateTemplate
 from utils.db_utils import db
 from ..models.portal import MemberCompanyPortal, Portal, PortalLayout, PortalDivision, \
-    PortalDivisionSettingsCompanySubportal, PortalConfig, PortalAdvertisment
+    PortalDivisionSettingsCompanySubportal, PortalConfig, PortalAdvertisement
 from .request_wrapers import ok, tos_required, check_right
 from ..models.articles import ArticlePortalDivision, ArticleCompany, Article
 from ..models.company import UserCompany
@@ -169,7 +169,7 @@ def portal_banners(company_id):
 @portal_bp.route('/portal_banners/<string:company_id>/', methods=['OK'])
 @check_right(UserIsEmployee, 'company_id')
 def portal_banners_load(json, company_id):
-    subquery = PortalAdvertisment().get_portal_advertisments(Company.get(company_id).own_portal.id, json.get('filter'))
+    subquery = PortalAdvertisement().get_portal_advertisements(Company.get(company_id).own_portal.id, json.get('filter'))
 
     banners, pages, current_page, count = pagination(subquery, **Grid.page_options(json.get('paginationOptions')))
     banners_list = [banner.get_client_side_dict() for banner in banners]
@@ -182,10 +182,10 @@ def portal_banners_load(json, company_id):
 @portal_bp.route('/save_portal_banner/<string:company_id>/', methods=['OK'])
 @check_right(UserIsEmployee, 'company_id')
 def save_portal_banner(json, company_id):
-    advertisment = PortalAdvertisment.get(json.get('editBanners')['id'])
-    advertisment.html = json.get('editBanners')['html']
-    advertisment.save()
-    return advertisment.get_client_side_dict()
+    advertisement = PortalAdvertisement.get(json.get('editBanners')['id'])
+    advertisement.html = json.get('editBanners')['html']
+    advertisement.save()
+    return advertisement.get_client_side_dict()
 
 
 @portal_bp.route('/portals_partners_change_status/<string:company_id>/<string:portal_id>', methods=['OK'])

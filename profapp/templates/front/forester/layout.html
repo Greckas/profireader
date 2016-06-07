@@ -38,16 +38,14 @@
                 {% include 'partials/pager.html' %}
             {% endif %}
         </div>
-        <div class="col-md-3">
-            <a href="#" class="right_banner_1">{{ portal.advs['right_banner_1']|safe }}</a>
-            <a href="#" class="right_banner_2">{{ portal.advs['right_banner_2']|safe }}</a>
 
+    {% if current_division.portal_division_type_id  in ['index', 'news', 'events'] %}
 
+            {{ advertisement('<div class="col-md-3"><a href="#" class="%(place)s">%(html)s</a></div>', 'right_banner_1', portal.id)}}
+
+            {{ advertisement('<div class="col-md-3"><a href="#" class="{place}">{html}</a></div>', 'right_banner_2', portal.id)}}
+    {% endif %}
         </div>
-
-    </div>
-
-
 </div>
 
 {% include 'footer.html' %}

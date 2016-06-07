@@ -43,7 +43,7 @@ class Portal(Base, PRBase):
 
     layout = relationship('PortalLayout')
 
-    advs = relationship('PortalAdvertisment', uselist=True)
+    advs = relationship('PortalAdvertisement', uselist=True)
 
     tags = relationship(Tag, uselist=True, cascade="all, delete-orphan")
 
@@ -330,7 +330,7 @@ class Portal(Base, PRBase):
                 portals.append(portal.get_client_side_dict())
         return portals
 
-class PortalAdvertisment(Base, PRBase):
+class PortalAdvertisement(Base, PRBase):
     __tablename__ = 'portal_adv'
     id = Column(TABLE_TYPES['id_profireader'], nullable=False, primary_key=True)
     portal_id = Column(TABLE_TYPES['id_profireader'], ForeignKey('portal.id'))
@@ -343,8 +343,8 @@ class PortalAdvertisment(Base, PRBase):
         self.place=place
         self.html=html
 
-    def get_portal_advertisments(self, portal_id=None, filters=None):
-        return db(PortalAdvertisment, portal_id=portal_id).order_by(PortalAdvertisment.place)
+    def get_portal_advertisements(self, portal_id=None, filters=None):
+        return db(PortalAdvertisement, portal_id=portal_id).order_by(PortalAdvertisement.place)
 
 
     def get_client_side_dict(self, fields='id,portal_id,place,html', more_fields=None):

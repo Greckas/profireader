@@ -279,6 +279,25 @@ def moment(value, out_format = None):
                 value, out_format if out_format else 'dddd, LL (HH:mm)', value))
 
 
+def advertisement(template, place, portal_id):
+
+
+    def try_to_get_adv(place, portal_id):
+        return db.portal_adv(place=place, portal_id=portal_id).first()
+    print(template)
+    adv = try_to_get_adv(place, portal_id)
+    template = template.replace("html", adv.html).replace("place", place)
+
+
+    print(adv.html, place)
+    # template // {html} adv.html
+    # template // {place} place
+
+    result=Markup(template)
+
+    return result
+
+
 @jinja2.contextfunction
 def nl2br(value):
     _paragraph_re = re.compile(r'(?:\r\n|\r|\n){2,}')
@@ -520,6 +539,7 @@ def create_app(config='config.ProductionDevelopmentConfig', apptype='profi'):
     app.jinja_env.globals.update(config_variables=config_variables)
     app.jinja_env.globals.update(_=translate_phrase)
     app.jinja_env.globals.update(moment=moment)
+    app.jinja_env.globals.update(advertisement=advertisement)
     app.jinja_env.globals.update(__=translate_html)
     app.jinja_env.globals.update(tinymce_format_groups=HtmlHelper.tinymce_format_groups)
     app.jinja_env.globals.update(pr_help_tooltip=pr_help_tooltip)

@@ -34,12 +34,22 @@
                 {% include 'partials/pager.html' %}
             {% endif %}
         </div>
-        <div class="col-md-3">
-            <a href="#" class="right_banner_1">{{ portal.advs['right_banner_1']|safe }}</a>
-            <a href="#" class="right_banner_2">{{ portal.advs['right_banner_2']|safe }}</a>
+        {% if banner != True %}
+
+        {% else %}
+            <div class="col-md-3">
+                            <a href="#" class="right_banner_1">{{ portal.advs['right_banner_1']|safe }}</a>
+                            <a href="#" class="right_banner_2">{{ portal.advs['right_banner_2']|safe }}</a>
 
 
-        </div>
+            </div>
+        {% endif %}
+
+
+
+
+
+
 
     </div>
 

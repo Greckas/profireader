@@ -330,9 +330,11 @@ def division(division_name, page=1):
 
     items_per_page = portal.get_value_from_config(key=PortalConfig.PAGE_SIZE_PER_DIVISION,
                                                   division_name=division.name)
+    # TODO:  OZ by OZ: we should search in catalog. now we can't so redirect request to index
     if division.portal_division_type_id == 'catalog' and search_text:
         return redirect(url_for('front.index', search_text=search_text))
-    if division.portal_division_type_id == 'news' or division.portal_division_type_id == 'events':
+
+    if division.portal_division_type_id in ['news', 'events']:
         order = Search.ORDER_POSITION if not search_text else Search.ORDER_RELEVANCE
         articles, pages, page = Search().search(
             ArticlePortalDivision().search_filter_default(division.id),
@@ -340,6 +342,8 @@ def division(division_name, page=1):
             items_per_page=items_per_page)
 
         add_tags(articles)
+
+
 
         current_division = division.get_client_side_dict()
 
@@ -360,13 +364,19 @@ def division(division_name, page=1):
     elif division.portal_division_type_id == 'catalog':
 
 
+
+
         members = {member.id: member.get_client_side_dict(fields="id|company|tags") for
                    member in division.portal.company_members}
+
 
         return render_template('front/' + g.portal_layout_path + 'catalog.html',
                                members=members,
                                current_division=division.get_client_side_dict(),
-                               portal=portal_and_settings(portal))
+                               portal=portal_and_settings(portal)                               )
+
+
+
 
     else:
         return 'unknown division.portal_division_type_id = %s' % (division.portal_division_type_id,)
