@@ -23,7 +23,6 @@ from collections import OrderedDict
 import base64
 from PIL import Image
 from io import BytesIO
-
 from ..utils import fileUrl, fileID
 
 Base = declarative_base()
@@ -799,6 +798,7 @@ class PRBase:
         event.listen(cls, 'after_insert', cls.add_to_search)
         event.listen(cls, 'after_update', cls.update_search_table)
         event.listen(cls, 'after_delete', cls.delete_from_search)
+
 
     @staticmethod
     def datetime_from_utc_to_local(utc_datetime, format):
