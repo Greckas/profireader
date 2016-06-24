@@ -1,9 +1,10 @@
-
+import requests
 import json
 import math
 from .. import utils
 from utils.db_utils import db
 from sqlalchemy import event
+
 
 # engine = create_engine(ProductionDevelopmentConfig.SQLALCHEMY_DATABASE_URI)
 # db_session = scoped_session(sessionmaker(autocommit=False,
@@ -11,18 +12,14 @@ from sqlalchemy import event
 #                                          bind=engine))
 
 class PRElasticConnection:
-
     host = None
 
     def __init__(self, host):
         self.host = host
 
-
-
     def path(self, *args, params=None):
         return (self.host + '/' + '/'.join(args)) + '?' + \
                ('&'.join(["%s=%s" % (k, v) for k, v in params.items()]) if params else '')
-
 
     def rq(self, path='', req='', method='GET', returnstatusonly=False):
         print(method + ' - ' + path)
@@ -51,54 +48,55 @@ class PRElasticConnection:
 
     def doctype_exists(self, index_name, doctype_name):
         ret = self.rq(path=self.path(index_name, '_mapping', doctype_name), req={}, method='GET')
-        #          return True if len(ret.keys()) > 0 else False
-        #     def doc_exists(self, indexname, doctype, id):
-        #         return PRElastic.rq(path=PRElastic.path(indexname, doctype, id), req={}, method='HEAD', returnstatusonly=True)
-        #
-        #     def doc_delete(self, indexname, doctype, id):
-        #         return PRElastic.rq(path=PRElastic.path(indexname, doctype, id), req={}, method='DELETE')
-        #
-        #     def doctype_exists(self, indexname, doctype):
-        #          ret = PRElastic.rq(path=PRElastic.path(indexname, '_mapping', doctype), req={}, method='GET')
-        #          return True if len(ret.keys()) > 0 else False
+        return True if len(ret.keys()) > 0 else False
+
+    def doc_exists(self, indexname, doctype, id):
+        return PRElasticConnection.rq(path=PRElasticConnection.path(indexname, doctype, id), req={}, method='HEAD', returnstatusonly=True)
+
+    def doc_delete(self, indexname, doctype, id):
+        return PRElasticConnection.rq(path=PRElasticConnection.path(indexname, doctype, id), req={}, method='DELETE')
+
+    def doctype_exists(self, indexname, doctype):
+        ret = PRElasticConnection.rq(path=PRElasticConnection.path(indexname, '_mapping', doctype), req={}, method='GET')
+        return True if len(ret.keys()) > 0 else False
 
 
-    def replace_document(self, index_name, document_type, id, document):
-        return self.rq(path=self.path(index_name, document_type, id), req=document, method='PUT')
+def replace_document(self, index_name, document_type, id, document):
+    return self.rq(path=self.path(index_name, document_type, id), req=document, method='PUT')
 
 
-    def remove_index(self, index_name):
-        return self.rq(path=self.path(index_name), req={}, method='DELETE')
+def remove_index(self, index_name):
+    return self.rq(path=self.path(index_name), req={}, method='DELETE')
 
 
-    def search(self, index_name, document_type, sort=["_score"], filter=[], must=[], should=[], page=1, items_per_page=10):
+def search(self, index_name, document_type, sort=["_score"], filter=[], must=[], should=[], page=1, items_per_page=10):
+    req = {
+        "sort": sort,
+        "query": {"bool": {"filter": filter, "must": must, "should": should}}}
 
-        req = {
-            "sort": sort,
-            "query": {"bool": {"filter": filter, "must": must, "should": should}}}
+    count = self.rq(path=self.path(index_name, document_type, '_count'),
+                    req=req, method='GET')['count']
 
-        count = self.rq(path=self.path(index_name, document_type, '_count'),
-                                       req=req, method='GET')['count']
+    pages = int(math.ceil(count / items_per_page))
 
-        pages = int(math.ceil(count / items_per_page))
+    p = utils.putInRange(page, 1, pages)
+    p = 1 if p == 0 else p
+    print(page, p, pages)
+    items = utils.putInRange(items_per_page, 1, 100)
 
-        p = utils.putInRange(page, 1, pages)
-        p = 1 if p == 0 else p
-        print(page, p, pages)
-        items = utils.putInRange(items_per_page, 1, 100)
+    res = self.rq(
+        path=self.path(index_name, document_type, '_search', params={'size': items,
+                                                                     'from': (p - 1) * items}),
+        req=req, method='GET')
+    found = [h['_source'] for h in res['hits']['hits']]
 
-        res = self.rq(
-            path=self.path(index_name, document_type, '_search', params={'size': items,
-                                                                                        'from': (p - 1) * items}),
-            req=req, method='GET')
-        found = [h['_source'] for h in res['hits']['hits']]
+    return (found, pages, p)
 
-        return (found, pages, p)
 
 elasticsearch = PRElasticConnection('http://elastic.profi:9200')
 
-class PRElasticDocument:
 
+class PRElasticDocument:
     elastic_cached_index_doctype = {}
 
     def elastic_get_fields(self):
@@ -110,10 +108,10 @@ class PRElasticDocument:
     def elastic_replace(self):
         self.create_doctype_if_not_exists()
         return elasticsearch.replace_document(self.elastic_get_index(),
-                                                    self.elastic_get_doctype(),
-                                                    self.elastic_get_id(),
-                                                    self.elastic_get_document(),
-                                                    )
+                                              self.elastic_get_doctype(),
+                                              self.elastic_get_id(),
+                                              self.elastic_get_document(),
+                                              )
 
     def create_index_if_not_exist(self):
         index_name = self.elastic_get_index()
@@ -142,7 +140,7 @@ class PRElasticDocument:
                 return True
 
             ret = elasticsearch.rq(path=elasticsearch.path(index_name, '_mapping', doctype_name),
-                          req=self.elastic_doctype_mappintg(), method='PUT')
+                                   req=self.elastic_doctype_mappintg(), method='PUT')
             if ret:
                 print('created doctype:', index_name, doctype_name)
                 self.elastic_cached_index_doctype[index_name][doctype_name] = True
@@ -172,7 +170,6 @@ class PRElasticDocument:
 
     def elastic_get_id(self):
         return None
-
 
 
 class PRElasticField:
