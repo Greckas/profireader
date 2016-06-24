@@ -31,11 +31,10 @@ class File(Base, PRBase):
     description = Column(TABLE_TYPES['text'], default='', nullable=False)
     copyright = Column(TABLE_TYPES['text'], default='', nullable=False)
     # youtube_id = Column(TABLE_TYPES['id_profireader'], ForeignKey('file.id'))
-
     company_id = Column(TABLE_TYPES['id_profireader'],
                         ForeignKey('company.id'))
-    article_portal_division_id = Column(TABLE_TYPES['id_profireader'],
-                                        ForeignKey('article_portal_division.id'))
+    # article_portal_division_id = Column(TABLE_TYPES['id_profireader'],
+    #                                     ForeignKey('article_portal_division.id'))
     copyright_author_name = Column(TABLE_TYPES['name'],
                                    default='',
                                    nullable=False)
