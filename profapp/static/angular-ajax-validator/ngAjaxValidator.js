@@ -37,7 +37,8 @@
     };
 
 
-    angular.module('ajaxFormModule', []).factory('$af', ['$ok', function ($ok) {
+    angular.module('ajaxFormModule', ['ui.bootstrap'])
+        .factory('$af', ['$ok', function ($ok) {
 
         var modelsForValidation = [];
 
@@ -80,7 +81,8 @@
         };
         return ret;
 
-    }]).directive('af', ['$af', '$ok', '$timeout', function ($af, $ok, $timeout) {
+    }])
+        .directive('af', ['$af', '$ok', '$timeout', function ($af, $ok, $timeout) {
 //TODO: OZ by OZ: interact with model validation features (prestine, dirty, valid)
         return {
             restrict: 'A',
@@ -196,7 +198,6 @@
                     };
                     notok = notok ? notok : function () {
                     };
-                    //debugger;
                     var validationdict = $af.$getValidationDict($scope['model']);
                     try {
                         var dataToSend = callCallback('afBefore' + action, $scope['model']);
@@ -213,7 +214,7 @@
                                     }, 0);
                                 }
                                 catch (e) {
-                                    add_message(e, 'warning');
+                                    add_message(e.message, 'warning');
                                     if (stateonfail) setInParent('afState', stateonfail);
                                     notok(resp);
                                 }
@@ -222,8 +223,8 @@
                                 if (stateonok) setInParent('afState', stateonfail);
                                 notok(resp, errorcode);
                             }).finally(function () {
-                                validationdict['http'] = null;
-                            });
+                            validationdict['http'] = null;
+                        });
                         if (validationdict) {
                             validationdict['http'] = promise;
                         }
@@ -246,12 +247,18 @@
                                 $scope.$af_original_model = cloneObject(resp);
                             });
                     }
+                    else {
+                        console.error('action `load` is not allowed now')
+                    }
                 };
 
                 $scope.reset = function () {
                     if ($scope.isActionAllowed('reset')) {
                         $scope.model = cloneObject($scope.$af_original_model);
                         $scope.$af_original_model_dirty = false;
+                    }
+                    else {
+                        console.error('action `reset` is not allowed now')
                     }
                 };
 
@@ -267,6 +274,7 @@
                     }
                     else {
                         debouncedvalidate();
+                        // console.error('action `validate` is not allowed now')
                     }
                 };
 
@@ -274,11 +282,14 @@
                     if ($scope.isActionAllowed('save')) {
                         func1('Save', 'saving', 'clean', 'saving_failed')
                     }
+                    else {
+                        console.error('action `save` is not allowed now')
+                    }
                 };
 
                 $scope.isActionAllowed = function (action) {
                     if (action === 'reset') {
-                        return $scope.$af_original_model_dirty?true:false;
+                        return $scope.$af_original_model_dirty ? true : false;
                     }
 
                     var http = $af.$getValidationDict($scope['model']);
@@ -330,11 +341,13 @@
             //},
             template: function (tElement, tAttrs) {
                 var model_fields = tAttrs['afValidationAnswer'].split(':');
+                //$(tElement).attr('uib-popover', "Ops! Pls enter at least one keyword");
                 var model_name = model_fields[0];
                 var field_name = model_fields[1];
                 var erm = '' + model_name + '.errors.' + field_name;
                 var ewm = '' + model_name + '.warnings.' + field_name;
                 var enm = '' + model_name + '.notices.' + field_name;
+                //$(tElement).attr('data-toggle')
                 return '<span class="error"   ng-if="' + erm + '"><span class="icon icon-stop"></span> {{ ' + erm + ' }}</span>' +
                     '<span class="warning" ng-if="!' + erm + ' && ' + ewm + '"><span class="icon icon-warning"></span> {{ ' + ewm + ' }}</span>' +
                     '<span class="notice"  ng-if="!' + erm + ' && ! ' + ewm + ' && ' + enm + '"><span class="icon icon-check"></span> {{ ' + enm + ' }}</span>';
@@ -344,7 +357,41 @@
 
             }
         }
-    }]);
+    }]).directive('prValidationAnswer', function ($compile) {
+        //TODO: OZ by OZ: maybe compile function is better solution (faster)
+        return {
+            restrict: 'A',
+            replace: false,
+            terminal: true,
+            priority: 1000,
+            link: function link(scope, element, attrs) {
+                //var model_name = '';
+                //var field_name = '';
+                //console.log(attrs);
+                //if (attrs['prValidationAnswer'] === '') {
+                //    //data.user.profireader_name
+                //    //data_validation.user:profireader_name
+                //    var model_field  = attrs['ngModel'].split('.');
+                //    field_name = model_field.pop();
+                //    model_name = model_field.shift() + '_validation';
+                //    model_name = model_name + '.' + model_field.join('.');
+                //}
+                //else {
+                    var model_fields = attrs['prValidationAnswer'].split(':');
+                    var model_name = model_fields[0];
+                    var field_name = model_fields[1];
+                //}
+
+                element.attr('uib-popover', "{{ "+model_name+".errors."+field_name+" || "+model_name+".warnings."+field_name+"" +
+                    " || "+model_name+".notices."+field_name+" }}");
+                element.attr('ng-class', "{'pr-validation-error': "+model_name+".errors."+field_name+", 'pr-validation-warning':" +
+                    " "+model_name+".warnings."+field_name+", 'pr-validation-notice': "+model_name+".notices."+field_name+"}");
+                element.removeAttr("pr-validation-answer"); //remove the attribute to avoid indefinite loop
+                element.removeAttr("data-pr-validation-answer"); //also remove the same attribute with data- prefix in case users specify data-common-things in the html
+                $compile(element)(scope);
+            }
+        };
+    });
 
 
 })(this.angular);

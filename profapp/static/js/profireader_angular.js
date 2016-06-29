@@ -75,12 +75,87 @@ function resolveDictForAngularController(dict) {
     }))
 }
 
-angular.module('profireaderdirectives', ['ui.bootstrap', 'ui.bootstrap.tooltip'])
+var prDatePicker_and_DateTimePicker = function (name, $timeout) {
+    return {
+        require: 'ngModel',
+        restrict: 'A',
+        scope: {
+            ngModel: '=',
+        },
+        link: function (scope, element, attrs, ngModelController) {
+
+            var defformat = (name === 'prDatePicker') ? 'dddd, LL' : 'dddd, LL (HH:mm)';
+
+            var format = (attrs[name] ? attrs[name] : defformat);
+            element.addClass((name === 'prDatePicker') ? "pr-datepicker" : "pr-datetimepicker");
+
+            ngModelController.$formatters = [function (d) {
+                var m = moment(d);
+                return m.isValid() ? m.format(format) : "";
+            }];
+
+            scope.$watch('ngModel', function (newdate, olddate) {
+                var setdate = null;
+                if (newdate) {
+                    setdate = moment(newdate);
+                    if (setdate.isValid() && (!olddate) && name === 'prDateTimePicker') {
+                        var now = moment();
+                        setdate.minutes(now.minutes());
+                        setdate.hour(now.hour());
+                    }
+                }
+
+
+                element.data("DateTimePicker").date(setdate);
+            });
+
+            var opt = {
+                locale: window._LANG,
+                keepInvalid: true,
+                useCurrent: false,
+                widgetPositioning: {
+                    horizontal: 'left',
+                    vertical: 'bottom'
+                },
+                format: format
+            };
+            if (name === 'prDateTimePicker') {
+                opt['sideBySide'] = true;
+            }
+            element.datetimepicker(opt).on("dp.change", function (e) {
+                $timeout(function () {
+                    scope['ngModel'] = e.date ?
+                        ((name === 'prDatePicker') ? moment(e.date).format('YYYY-MM-DD') : e.date.toISOString()) :
+                        null;
+                }, 0)
+
+            })
+
+        }
+
+    }
+}
+
+angular.module('profireaderdirectives', ['ui.bootstrap', 'ui.bootstrap.tooltip', 'ui.select'])
     .factory('$publish', ['$http', '$uibModal', function ($http, $uibModal) {
         return function (dict) {
             var modalInstance = $uibModal.open({
                 templateUrl: 'submit_publish_dialog.html',
                 controller: 'submit_publish_dialog',
+                backdrop: 'static',
+                keyboard: false,
+                resolve: resolveDictForAngularController(dict)
+            });
+            return modalInstance;
+        }
+    }])
+    .factory('$membership_tags', ['$http', '$uibModal', function ($http, $uibModal) {
+        return function (dict) {
+            var modalInstance = $uibModal.open({
+                templateUrl: 'membership_tags.html',
+                controller: 'membership_tags',
+                backdrop: 'static',
+                keyboard: false,
                 resolve: resolveDictForAngularController(dict)
             });
             return modalInstance;
@@ -136,149 +211,231 @@ angular.module('profireaderdirectives', ['ui.bootstrap', 'ui.bootstrap.tooltip']
             }
         }
     }])
-    .directive('prCropper', ['$compile', '$templateCache', '$controller', '$timeout', function ($compile, $templateCache, $controller, $timeout) {
+    .directive('prFileChange', function () {
         return {
             restrict: 'A',
-            require: 'ngModel',
+            link: function (scope, element, attrs) {
+                var onChangeHandler = scope.$eval(attrs.prFileChange);
+                element.bind('change', onChangeHandler);
+            }
+        };
+    })
+    .directive('prCrop', function ($compile, $templateCache, $timeout) {
+        return {
+            restrict: 'A',
+            replace: false,
+            terminal: true,
+            priority: 1000,
+            scope: {
+                prCrop: '='
+            },
+            link: function link(scope, element, attrs) {
 
-            link: function (scope, element, attrs, model) {
-                element.html($templateCache.get('cropper.html'));
 
-                $compile(element.contents())(scope);
+                element.attr('ng-crop', 'selectedurl');
+                element.attr('ng-crop-coordinates', 'coordinates');
+                element.attr('ng-crop-options', 'options');
+                element.attr('ng-crop-zoom', 'zoom');
+                element.attr('ng-crop-origin', 'origin');
+                element.attr('logic', 'logic');
+                element.attr('ng-crop-disabled', 'disabled');
+                element.attr('ng-crop-loading', 'loading');
 
-                scope.ImageSelected = function (item) {
-                    model.$modelValue.coordinates = {rotate: 0};
-                    model.$modelValue.image_file_id = item.id;
-                    closeFileManager();
+                element.attr('ng-crop-on-error', 'onerror');
+                element.attr('ng-crop-on-load', 'onload');
+
+
+                element.removeAttr("pr-crop");
+
+                scope.logic = null;
+                scope.zoomable = true;
+                scope.disabled = false;
+                scope.original_model = null;
+
+                scope.onerror = function (m) {
+                    add_message(m, 'warning')
                 };
 
-                var callback_name = 'prcropper_image_selected_callback_' + scope.controllerName + '_' + randomHash();
+                $(element).after($templateCache.get('pr-crop-buttons.html'));
 
-                window[callback_name] = scope.ImageSelected;
-
-
-                scope.chooseImage = function (setImage) {
-                    if (setImage) {
-                        scope.chooseImageinFileManager("parent." + callback_name, 'choose', '', attrs['prCompanyId']);
-                        model.$modelValue.uploaded = false;
-                    }
-                    else {
-                        model.$modelValue.image_file_id = null;
-                    }
-                };
-
-                var $image = $('img', element);
-                var $inputImage = $('input', element);
-
-                var URL = window.URL || window.webkitURL;
-                var blobURL;
-
-
-                var options = {
-                    crop: function (e) {
-                        if (model.$modelValue) {
-                            //e['image_file_id'] = model.$modelValue.image_file_id;
+                scope.$watch('zoom', function (newv, oldv) {
+                        if (newv) {
+                            if (!scope.prCrop['selected_by_user']['crop_coordinates'])
+                                scope.prCrop['selected_by_user']['crop_coordinates'] = {};
+                            scope.prCrop['selected_by_user']['crop_coordinates']['zoom'] = newv;
                         }
-                        model.$modelValue.coordinates = e;
                     }
-                };
+                );
 
-                var uploadCropper = function () {
-                    var files = this.files;
-                    var file;
-                    var ff = $('input#inputImage').prop('files')[0];
-                    if (files && files.length) {
-                        file = files[0];
-                        var fr = new FileReader();
-                        fr.readAsDataURL(ff);
-                        var content = '';
-                        fr.onload = function (e) {
-                            content = fr.result;
-                            if (/^image\/\w+$/.test(file.type)) {
-                                $inputImage.val('');
-                                blobURL = URL.createObjectURL(file);
-                                model.$modelValue.type = file.type;
-                                model.$modelValue.name = file.name;
-                                model.$modelValue.dataContent = content;
-                                model.$modelValue.uploaded = true;
-                                model.$modelValue.image_file_id = blobURL;
-
-                            } else {
-                                add_message('Please choose an image file.');
+                scope.$watch('origin', function (newv, oldv) {
+                        if (newv) {
+                            if (!scope.prCrop['selected_by_user']['crop_coordinates'])
+                                scope.prCrop['selected_by_user']['crop_coordinates'] = {};
+                            if (newv) {
+                                scope.prCrop['selected_by_user']['crop_coordinates']['origin_x'] = newv[0];
+                                scope.prCrop['selected_by_user']['crop_coordinates']['origin_y'] = newv[1];
                             }
-                        };
+                            else {
+                                scope.prCrop['selected_by_user']['crop_coordinates']['origin_x'] = 0;
+                                scope.prCrop['selected_by_user']['crop_coordinates']['origin_y'] = 0;
+                            }
 
-                    }
-                };
-
-                var restartCropper = function () {
-
-                    $image.cropper('destroy');
-                    if (model.$modelValue.uploaded) {
-                        $image.attr('src', model.$modelValue.image_file_id);
-                        $image.cropper(options);
-                        $image.cropper('replace', model.$modelValue.image_file_id);
-                    }
-                    else {
-                        if (model.$modelValue.image_file_id) {
-                            $image.attr('src', fileUrl(model.$modelValue.image_file_id));
-                            $image.cropper(options);
-                        }
-                        else {
-                            $image.attr('src', model.$modelValue.no_image_url);
                         }
                     }
-                };
+                );
 
-                if (attrs['prCropper']) {
-                    scope[attrs['prCropper']] = function () {
-                        $image.cropper.apply($image, arguments);
-                    };
-                }
-                //
-                scope.$watch(attrs['ngModel'] + '.image_file_id', function () {
-                    if (model && model.$modelValue) {
-                        //var file_url = fileUrl(model.$modelValue.image_file_id);
-                        //$image.attr('src', );
-                        //$image.cropper('replace', file_url);
-
-                        if (model) {
-                            if (model.$modelValue && model.$modelValue.ratio) options.aspectRatio = model.$modelValue.ratio;
-                            if (model.$modelValue && model.$modelValue.coordinates) options.data = model.$modelValue.coordinates;
-                        }
-
-                        restartCropper();
-
-                        //
-                        //if (file_url) {
-                        //
-                        //}
-                        //else {
-                        //    console.log('no image');
-                        //}
+                scope.$watchCollection('coordinates', function (newv, oldv) {
+                    if (newv) {
+                        if (!scope.prCrop['selected_by_user']['crop_coordinates'])
+                            scope.prCrop['selected_by_user']['crop_coordinates'] = {};
+                        scope.prCrop['selected_by_user']['crop_coordinates']['x'] = newv[0];
+                        scope.prCrop['selected_by_user']['crop_coordinates']['y'] = newv[1];
+                        scope.prCrop['selected_by_user']['crop_coordinates']['width'] = newv[2] - newv[0];
+                        scope.prCrop['selected_by_user']['crop_coordinates']['height'] = newv[3] - newv[1];
                     }
                 });
 
-                $inputImage.change(uploadCropper);
-                //
-                //scope.$watch(attrs['ngModel'] + '.ratio', function () {
-                //    if (model.$modelValue && model.$modelValue.ratio) {
-                //        $image.cropper('setAspectRatio', model.$modelValue.ratio);
-                //    }
-                //});
-                //
-                //scope.$watch(attrs['ngModel'] + '.coordinates', function () {
-                //    if (model.$modelValue) console.log(model.$modelValue.coordinates);
-                //    if (model.$modelValue && model.$modelValue.coordinates) {
-                //        options.data = model.$modelValue.coordinates;
-                //        restartCropper();
-                //        //$image.cropper('setData', model.$modelValue.coordinates);
-                //    }
-                //});
+                scope.$watch('prCrop', function (newv, oldv) {
+                    // console.log('prCrop prCrop');
+                    scope.preset_urls = scope.prCrop ? scope.prCrop['preset_urls'] : {};
+                    if (!newv) return;
 
+                    var selected_by_user = newv['selected_by_user'];
+                    if (!scope.original_model) {
+                        scope.original_model = $.extend(true, {}, selected_by_user);
+                    }
+                    scope.coordinates = [];
+                    scope.state = {};
+                    scope.browsable = newv['browse'] ? true : false;
+                    scope.uploadable = newv['upload'] ? true : false;
+                    scope.resetable = true;
+                    scope.noneurl = newv['no_selection_url'];
+                    scope.options = {};
+                    if (newv.min_size) scope.options['min_width'] = newv.min_size[0];
+                    if (newv.min_size) scope.options['min_height'] = newv.min_size[1];
+                    if (newv.cropper && newv.cropper.aspect_ratio) scope.options['min_aspect'] = newv.cropper.aspect_ratio[0];
+                    if (newv.cropper && newv.cropper.aspect_ratio) scope.options['max_aspect'] = newv.cropper.aspect_ratio[1];
+                    scope.setModel(selected_by_user, false);
+                });
+
+                scope.selectPresetUrl = function (className) {
+                    if (scope.prCrop['preset_urls'] && scope.prCrop['preset_urls'][className]) {
+                        scope.setModel({'type': 'preset', 'class': className});
+                    }
+                };
+
+                var callback_name = 'pr_cropper_image_selected_in_filemanager_callback_' + scope.controllerName + '_' + randomHash();
+
+
+                window[callback_name] = function (item) {
+                    scope.setModel({'type': 'browse', 'image_file_id': item.id, crop_coordinates: null});
+                    closeFileManager();
+                };
+
+                scope.selectNone = function () {
+                    scope.setModel({'type': 'none'});
+                };
+
+                scope.resetModel = function () {
+                    scope.setModel($.extend(true, {}, scope.original_model));
+                };
+
+
+                scope.setModel = function (model, do_not_set_ng_crop) {
+
+                    // console.log('set_model',model);
+
+                    switch (model['type']) {
+                        case 'browse':
+                            var crd = model.crop_coordinates;
+                            scope.selectedurl = fileUrl(model['image_file_id']);
+                            scope.disabled = false;
+                            scope.coordinates = crd ? [crd.x, crd.y, crd.width + crd.x, crd.height + crd.y] : null;
+                            scope.origin = crd ? [crd.origin_x, crd.origin_y] : null;
+                            scope.zoom = crd ? crd.zoom : null;
+                            // scope.state = null;
+                            break;
+                        case 'none':
+                            scope.selectedurl = scope.noneurl;
+                            scope.disabled = true;
+                            scope.coordinates = null;
+                            scope.zoom = null;
+                            scope.origin = null;
+                            // scope.state = null;
+                            break;
+                        case 'upload':
+                            scope.selectedurl = model['file']['content'];
+                            scope.disabled = false;
+                            scope.coordinates = null;
+                            scope.zoom = null;
+                            scope.origin = null;
+                            // scope.state = null;
+                            break;
+                        case 'preset':
+                            scope.selectedurl = scope.prCrop['preset_urls'][model['class']];
+                            scope.disabled = true;
+                            scope.coordinates = null;
+                            scope.zoom = null;
+                            scope.origin = null;
+                            // scope.state = null;
+                            break;
+                    }
+
+                    scope.onload = function (cropper_logic) {
+                        if (!do_not_set_ng_crop) {
+                            $timeout(function () {
+                                scope.prCrop['selected_by_user'] = model;
+                            })
+                        }
+                    }
+
+                };
+
+                scope.fileUploaded = function (event) {
+                    var the_file = (event.target.files && event.target.files.length) ? event.target.files[0] : false;
+                    $(this).val('');
+                    if (the_file) {
+                        var fr = new FileReader();
+                        fr.onload = function (e) {
+                            scope.setModel({
+                                'type': 'upload',
+                                'file': {'mime': the_file.type, 'name': the_file.name, 'content': fr.result}
+                            })
+                        };
+                        fr.onerror = function (e) {
+                            add_message('File loading error', 'warning');
+                        };
+                        fr.readAsDataURL(the_file);
+                    }
+                };
+
+                scope.chooseImage = function (setImage) {
+                    scope.$root.chooseImageinFileManager("parent." + callback_name, 'choose', '', scope.original_model['browse']);
+                };
+
+
+                scope.zoom_by = function (by, check_only) {
+                    if (scope.loading || scope.disabled || !scope.logic) return false;
+                    // console.log(scope.logic, scope.logic.ctr);
+                    // debugger;
+                    var ok = false;
+                    if (by > 1 && scope.zoom <= scope.logic.ctr.max_zoom * 0.99) ok = true;
+                    if (by < 1 && scope.zoom >= scope.logic.ctr.min_zoom * 1.01) ok = true;
+                    if (!check_only && ok) $timeout(function () {
+                        scope.zoom *= by;
+                        console.log(scope.zoom);
+                    })
+                    return ok;
+                };
+
+
+                $compile(element)(scope);
+                $compile($(element).next())(scope);
             }
-        };
-    }])
+        }
+            ;
+    })
+
     .directive('dateTimestampFormat', function () {
         return {
             require: 'ngModel',
@@ -299,6 +456,11 @@ angular.module('profireaderdirectives', ['ui.bootstrap', 'ui.bootstrap.tooltip']
                 });
             }
         };
+    })
+    .directive('prDateTimePicker', function ($timeout) {
+        return prDatePicker_and_DateTimePicker('prDateTimePicker', $timeout);
+    }).directive('prDatePicker', function ($timeout) {
+        return prDatePicker_and_DateTimePicker('prDatePicker', $timeout);
     })
     .directive('prDatepicker', function () {
         return {
@@ -357,6 +519,7 @@ angular.module('profireaderdirectives', ['ui.bootstrap', 'ui.bootstrap.tooltip']
                 scope.$watch('prImage', function (newval, oldval) {
                     element.css({
                         backgroundImage: "url('" + fileUrl(newval, false, no_image) + "')"
+                        // backgroundImage: "url('" + newval + "')"
                     });
                 });
                 element.attr('src', '//static.profireader.com/static/images/0.gif');
@@ -397,28 +560,30 @@ angular.module('profireaderdirectives', ['ui.bootstrap', 'ui.bootstrap.tooltip']
             restrict: 'AE',
             link: function (scope, element, attrs) {
                 var elementType = element.prop('nodeName');
-                scope.$watch(attrs['prUserCan'], function (val) {
-                    enable(val)
-                })
-
-                var disable = function (allow) {
+                var enable = function (allow) {
                     if (allow === true) {
-                        element.removeProp('disabled');
+                        element.prop('disabled', false);
                         element.removeClass('disabled');
                         element.prop('title', '');
                     } else {
                         if (elementType === 'BUTTON' || elementType === 'INPUT') {
                             element.prop('disabled', true);
-                            element.prop('title', allow === false?'':allow);
+                            element.prop('title', allow === false ? '' : allow);
                         } else if (elementType === 'A') {
                             element.addClass('disabled');
-                            element.prop('title', allow === false?'':allow);
+                            element.prop('title', allow === false ? '' : allow);
                         } else {
                             element.hide()
                         }
 
                     }
                 }
+
+                scope.$watch(attrs['prUserCan'], function (val) {
+                    enable(val)
+                })
+
+
             }
         };
     })
@@ -532,127 +697,37 @@ angular.module('profireaderdirectives', ['ui.bootstrap', 'ui.bootstrap.tooltip']
         };
 
         return objectTransformation;
-    })
-    .directive('ngOk', ['$http', '$compile', '$ok', function ($http, $compile, $ok) {
-        return {
-            restrict: 'A',
-            scope: {
-                ngOnsubmit: '&',
-                ngOnsuccess: '&',
-                ngOnfail: '&',
-                ngAction: '=',
-                ngWatch: '@'
-            },
-            link: function (scope, iElement, iAttrs, ngModelCtrl) {
+    }).filter('propsFilter', function () {
+    return function (items, props) {
+        var out = [];
 
+        if (angular.isArray(items)) {
+            var keys = Object.keys(props);
 
-                if (iAttrs['ngValidationResult']) {
-                    scope[iAttrs['ngValidationResult']] = {};
-                    var s = scope[iAttrs['ngValidationResult']];
+            items.forEach(function (item) {
+                var itemMatches = false;
 
-                    s.checking = {};
-                    s.checked = {};
-
-                    s.errors = {};
-                    s.warnings = {};
-                    s.dirty = true;
-
-                    s.submitting = false;
-                    s.url = null;
-                    s.on_success_url = null;
+                for (var i = 0; i < keys.length; i++) {
+                    var prop = keys[i];
+                    var text = props[prop].toLowerCase();
+                    if (item[prop].toString().toLowerCase().indexOf(text) !== -1) {
+                        itemMatches = true;
+                        break;
+                    }
                 }
 
-                iAttrs.$observe('ngAjaxAction', function (value) {
-                    s.url = value;
-                });
-
-                iAttrs.$observe('ngOnSuccess', function (value) {
-                    s.on_success_url = value;
-                });
-
-
-                $.each($('[name]', $(iElement)), function (ind, el) {
-                    $newel = $(el).clone();
-                    scope.data[$(el).attr('name')] = $(el).val();
-                    $newel.attr('ng-model', 'data.' + $newel.attr('name'));
-                    $(el).replaceWith($compile($newel)(scope))
-                });
-
-
-                s.getSignificantClass = function (index, one, onw, onn) {
-
-                    if (s.errors && !areAllEmpty(s.errors[index])) {
-                        return one;
-                    }
-                    if (s.warnings && !areAllEmpty(s.warnings[index])) {
-                        return onw;
-                    }
-                    if (s.notices && !areAllEmpty(s.notices[index])) {
-                        return onn;
-                    }
-                    return '';
-                };
-
-                s.getSignificantMessage = function (index) {
-
-                    if (s.errors && !areAllEmpty(s.errors[index])) {
-                        return s.errors[index][0];
-                    }
-                    if (s.warnings && !areAllEmpty(s.warnings[index])) {
-                        return s.warnings[index][0];
-                    }
-                    if (s.notices && !areAllEmpty(s.notices[index])) {
-                        return s.notices[index][0]
-                    }
-                    return '';
-                };
-
-
-                s.refresh = function () {
-                    s.changed = getObjectsDifference(s.checked, s['data']);
-                    s.check();
-                };
-
-                s.check = _.debounce(function (d) {
-                    if (areAllEmpty(s.checking)) {
-                        console.log('s.changed', s.changed);
-                        s.changed = getObjectsDifference(s.checked, scope['data']);
-                        if (!areAllEmpty(s.changed)) {
-                            s.checking = scope['data'];
-
-                            $http.post($(iElement).attr('njAjaxAction'), s.checking)
-                                .then(function (fromserver) {
-                                    var resp = fromserver['data'];
-                                    if (areAllEmpty(getObjectsDifference(s.checking, scope['data']))) {
-                                        s.errors = $.extend(true, {}, resp['errors']);
-                                        s.warnings = $.extend(true, {}, resp['warnings']);
-                                        s.checked = $.extend(true, {}, s.checking);
-                                        s.changed = {};
-                                        s.checking = {};
-                                    }
-                                    else {
-                                        s.checking = {};
-                                        s.refresh();
-                                    }
-                                }, function () {
-                                    s.checking = {};
-                                    s.refresh();
-                                });
-                        }
-                    }
-                    else {
-                        s.refresh();
-                    }
-                }, 500);
-                console.log(iAttrs);
-                if (iAttrs['ngAjaxFormValidate'] !== undefined) {
-                    s.$watch('data', s.refresh, true);
-                    s.refresh();
+                if (itemMatches) {
+                    out.push(item);
                 }
-                s.getTemp(iAttrs.ngCity);
-            }
+            });
+        } else {
+            // Let the output be the input untouched
+            out = items;
         }
-    }]);
+
+        return out;
+    };
+});
 
 
 areAllEmpty = function () {
@@ -676,14 +751,16 @@ areAllEmpty = function () {
     return are;
 };
 
+
 function file_choose(selectedfile) {
+    console.log(selectedfile)
     var args = top.tinymce.activeEditor.windowManager.getParams();
     var win = (args.window);
     var input = (args.input);
     if (selectedfile['type'] === 'file_video') {
         win.document.getElementById(input).value = "https://youtu.be/" + selectedfile['youtube_data']['id'] + "?list=" + selectedfile['youtube_data']['playlist_id'];
     } else {
-        win.document.getElementById(input).value = selectedfile['url'];
+        win.document.getElementById(input).value = selectedfile['file_url'];
     }
     top.tinymce.activeEditor.windowManager.close();
 }
@@ -787,7 +864,7 @@ module.directive('ngDropdownMultiselect', ['$filter', '$document', '$compile', '
                 var groups = attrs.groupBy ? true : false;
 
                 var template = '<div class="multiselect-parent btn-group dropdown-multiselect" style="width:100%"><div class="kk"><div>';
-                template += '<button type="button" style="width:100%"  id="t1" class="dropdown-toggle" ng-class="settings.buttonClasses" ng-click="toggleDropdown()">{{getButtonText()}}&nbsp;<span class="caret"></span></button>';
+                template += '<button type="button" style="width:100%"  id="t1" class="dropdown-toggle" ng-class="settings.buttonClasses" ng-disabled="parentScope.loading" ng-click="toggleDropdown()">{{getButtonText()}}&nbsp;<span class="caret"></span></button>';
                 template += '<ul class="dropdown-menu dropdown-menu-form ng-dr-ms" ng-style="{display: open ? \'block\' : \'none\', height : settings.scrollable ? settings.scrollableHeight : \'auto\' }" style="position: fixed; top:auto; left: auto; width: 20%;cursor: pointer" >';
                 template += '<li ng-show="settings.selectionLimit === 0"><a data-ng-click="selectAll()"><span class="glyphicon glyphicon-ok"></span>  {{texts.checkAll}}</a>';
                 template += '<li ng-show="settings.showUncheckAll"><a data-ng-click="deselectAll(true);"><span class="glyphicon glyphicon-remove"></span>   {{texts.uncheckAll}}</a></li>';
@@ -941,10 +1018,36 @@ module.directive('ngDropdownMultiselect', ['$filter', '$document', '$compile', '
                     return groupValue;
                 };
 
+                $scope.get_default_selected = function (exeptions) {
+                    if (exeptions) {
+                        $scope.listElemens[$scope.addData.field] = [];
+                        $timeout(function () {
+                            for (var f = 0; f < $scope.options.length; f++) {
+                                if (exeptions instanceof Array) {
+                                    if (exeptions.indexOf($scope.options[f]['label']) === -1) {
+                                        $scope.listElemens[$scope.addData.field].push($scope.options[f]['label'])
+                                    }
+                                } else {
+                                    if ($scope.options[f]['label'] !== exeptions) {
+                                        $scope.listElemens[$scope.addData.field].push($scope.options[f]['label'])
+                                    }
+                                }
+                            }
+                        }, 500)
+                    }
+                };
+
                 $scope.getButtonText = function () {
                     if (!$scope.listElemens) {
                         $scope.listElemens = {};
-                        $scope.listElemens[$scope.addData.field] = []
+                        $scope.listElemens[$scope.addData.field] = [];
+                        $timeout(function () {
+                            $scope.filters_exception = $scope.parentScope.gridApi.grid.filters_init_exception
+                            if ($scope.filters_exception) {
+                                $scope.get_default_selected($scope.filters_exception)
+                            }
+                        }, 2000);
+
                     }
                     if ($scope.settings.dynamicTitle && ($scope.selectedModel.length > 0 || (angular.isObject($scope.selectedModel) && _.keys($scope.selectedModel).length > 0))) {
                         if ($scope.settings.smartButtonMaxItems > 0) {
@@ -1010,8 +1113,9 @@ module.directive('ngDropdownMultiselect', ['$filter', '$document', '$compile', '
                         $scope.isSelectAll = false;
                         delete $scope.data.filter[$scope.addData.field];
                         $scope.listElemens[$scope.addData.field] = [];
+                        if ($scope.filters_exception)
+                            $scope.data.filter[$scope.addData.field] = []
                         $scope.send($scope.data);
-                        $scope.externalEvents.onDeselectAll();
                         if ($scope.singleSelection) {
                             clearObject($scope.selectedModel);
                         } else {
@@ -1045,6 +1149,7 @@ module.directive('ngDropdownMultiselect', ['$filter', '$document', '$compile', '
 
                     if (!dontRemove && exists) {
                         $scope.externalEvents.onItemDeselect(findObj);
+                        $scope.isSelectAll = false;
                         index = $scope.listElemens[$scope.addData.field].indexOf(label);
                         $scope.listElemens[$scope.addData.field].splice(index, 1);
                         if ($scope.listElemens[$scope.addData.field].length > 0) {
@@ -1085,7 +1190,6 @@ function pr_dictionary(phrase, dictionaries, allow_html, scope, $ok, ctrl) {
     if (typeof phrase !== 'string') {
         return '';
     }
-
     if (!scope.$$translate) {
         scope.$$translate = {};
     }
@@ -1102,7 +1206,6 @@ function pr_dictionary(phrase, dictionaries, allow_html, scope, $ok, ctrl) {
             allow_html: allow_html,
             url: window.location.href
         }, function (resp) {
-
 
         });
     }
@@ -1150,7 +1253,6 @@ function pr_dictionary(phrase, dictionaries, allow_html, scope, $ok, ctrl) {
         return phrase
     }
 }
-
 module.run(function ($rootScope, $ok, $sce, $uibModal, $sanitize, $timeout, $templateCache) {
     //$rootScope.theme = 'bs3'; // bootstrap3 theme. Can be also 'bs2', 'default'
     angular.extend($rootScope, {
@@ -1176,14 +1278,7 @@ module.run(function ($rootScope, $ok, $sce, $uibModal, $sanitize, $timeout, $tem
             if (!search) {
                 return $sce.trustAsHtml(text);
             }
-            return $sce.trustAsHtml(text.replace(new RegExp(search, 'gi'), '<span class="highlightedText">$&</span>'));
-        },
-        grid_change_row: function (grid_data, new_row) {
-            $.each(grid_data['grid_data'], function (index, old_row) {
-                if (old_row['id'] === new_row['id']) {
-                    grid_data['grid_data'][index] = new_row;
-                }
-            });
+            return $sce.trustAsHtml(text.replace(new RegExp(search, 'gi'), '<span pr-test="MachedLightedText" class="highlightedText">$&</span>'));
         },
 
         setGridExtarnals: function (gridApi) {
@@ -1198,10 +1293,6 @@ module.run(function ($rootScope, $ok, $sce, $uibModal, $sanitize, $timeout, $tem
             gridApi.grid.additionalDataForMS = {};
             gridApi.grid.all_grid_data.paginationOptions.pageSize = gridApi.grid.options.paginationPageSize;
             var col = gridApi.grid.options.columnDefs;
-
-            var rowClass = gridApi.grid.options.rowClass
-            gridApi.grid.options.rowTemplate = '<div ng-repeat="(colRenderIndex, col) in colContainer.renderedColumns track by col.colDef.name" class="ui-grid-cell' + rowClass + 'ddd" ng-class="{ \'ui-grid-row-header-cell\': col.isRowHeader, \'custom\': true }" ui-grid-cell></div>'
-
             $.each(col, function (ind, c) {
                 col[ind] = $.extend({
                     enableSorting: false,
@@ -1210,10 +1301,10 @@ module.run(function ($rootScope, $ok, $sce, $uibModal, $sanitize, $timeout, $tem
                 }, c);
             });
 
-            gridApi.grid.options.headerTemplate = '<div class="ui-grid-header" ><div class="ui-grid-top-panel"><div class="ui-grid-header-viewport"><div class="ui-grid-header"></div><div class="ui-grid-header-canvas" >' +
+            gridApi.grid.options.headerTemplate = '<div class="ui-grid-header" ><div class="ui-grid-top-panel"><div class="ui-grid-header-viewport"><div class="ui-grid-header"></div><div id="ui-grid-to-height" class="ui-grid-header-canvas">' +
                 '<div class="ui-grid-header-cell-wrapper" ng-style="colContainer.headerCellWrapperStyle()"><div role="row" class="ui-grid-header-cell-row">' +
                 '<div class="ui-grid-header-cell ui-grid-clearfix ui-grid-category" ng-repeat="cat in grid.options.category" ng-if="cat.visible && (colContainer.renderedColumns | filter:{ colDef:{category: cat.name} }).length > 0"> ' +
-                '<div class="ui-grid-filter-container"><input type="text" class="ui-grid-filter-input ui-grid-filter-input-{{$index}}" ng-enter="grid.searchItemGrid(cat)" ng-model="cat.filter.text" aria-label="{{colFilter.ariaLabel || aria.defaultFilterLabel}}" placeholder="{{ grid.appScope._(\'search\') }}"> ' +
+                '<div class="ui-grid-filter-container"><input type="text" class="form-control" ng-enter="grid.searchItemGrid(cat)" ng-model="cat.filter.text" aria-label="{{colFilter.ariaLabel || aria.defaultFilterLabel}}" placeholder="{{ grid.appScope._(\'search\') }}"> ' +
                 '<div role="button" class="ui-grid-filter-button" ng-click="grid.refreshGrid(cat)" ng-if="!colFilter.disableCancelFilterButton" ng-disabled="cat.filter.text === undefined || cat.filter.text === null || cat.filter.text === \'\'" ng-show="cat.filter.text !== undefined && cat.filter.text !== null && cat.filter.text !== \'\'"> <i class="ui-grid-icon-cancel" ui-grid-one-bind-aria-label="aria.removeFilter">&nbsp;</i> </div> </div> ' +
                 '<div class="ui-grid-header-cell ui-grid-clearfix" ng-if="col.colDef.category === cat.name && grid.options.category" ng-repeat="col in colContainer.renderedColumns | filter:{ colDef:{category: cat.name} }" ui-grid-header-cell col="col" render-index="$index"> <div ng-class="{ \'sortable\': sortable }" class="ng-scope sortable"> <div ui-grid-filter="" ng-show="col.colDef.category !== undefined"></div> </div> </div> </div>' +
                 '<div class="ui-grid-header-cell ui-grid-clearfix" ng-if="col.colDef.category === undefined || grid.options.category === undefined"  ng-repeat="col in colContainer.renderedColumns track by col.colDef.name" ui-grid-header-cell col="col" render-index="$index" ng-style="$index === 0 && colContainer.columnStyle($index)"></div>' +
@@ -1232,24 +1323,28 @@ module.run(function ($rootScope, $ok, $sce, $uibModal, $sanitize, $timeout, $tem
                     switch (col.filter.type) {
                         case 'input':
                             return '<div class="ui-grid-filter-container">' +
-                                '<input type="text" class="ui-grid-filter-input ui-grid-filter-input-{{$index}}" ng-enter="grid.searchItemGrid(col)" ng-model="col.filter.text"  aria-label="{{colFilter.ariaLabel || aria.defaultFilterLabel}}">' +
+                                '<input type="text" class="form-control" ng-enter="grid.searchItemGrid(col)" ng-model="col.filter.text"  aria-label="{{colFilter.ariaLabel || aria.defaultFilterLabel}}">' +
                                 '<div role="button" class="ui-grid-filter-button" ng-click="grid.refreshGrid(col)" ng-if="!colFilter.disableCancelFilterButton" ng-disabled="col.filter.text === undefined || col.filter.text === null || col.filter.text === \'\'" ng-show="col.filter.text !== undefined && col.filter.text !== null && col.filter.text !== \'\'">' +
                                 '<i class="ui-grid-icon-cancel" ui-grid-one-bind-aria-label="aria.removeFilter">&nbsp;</i></div></div>'
                         case 'date_range':
-                            // TODO: SS by OZ: use here our directive pr-datepicker (<div pr-datepicker ng-model="model"></div>)
-                            return '<div class="ui-grid-filter-container"><input  style="width: 48%; display: inline" type="date" class="form-control" uib-datepicker-popup ng-model="col.filters[0].term" ng-required="true" datepicker-options="dateOptions" close-text="Close"/>' +
-                                '<input style="width: 48%; display: inline" type="date" class="form-control" uib-datepicker-popup ng-model="col.filters[1].term" ng-required="true" datepicker-options="dateOptions" close-text="Close"/>' +
+                            return '<div class="ui-grid-filter-container" style="position: fixed; top:auto; left: auto; width: 25%;cursor: pointer;z-index: 1"><input placeholder="from"  style="width: 48%; display: inline;" class="form-control" pr-date-picker ng-model="col.filters[0].term" ng-required="true" close-text="Close"/>' +
+                                '<input style="width: 48%; display: inline;" class="form-control" pr-date-picker ng-model="col.filters[1].term" ng-required="true" placeholder="to"  close-text="Close"/>' +
                                 '<span class="input-group-btn"></span><div role="button" class="ui-grid-filter-button" ng-click="grid.refreshGrid(col)" ng-if="!colFilter.disableCancelFilterButton" ng-disabled="col.filters[1].term === undefined || col.filters[0].term === undefined" ng-show="col.filters[1].term !== undefined && col.filters[1].term !== \'\' && col.filters[0].term !== undefined && col.filters[0].term !== \'\'">' +
                                 '<i class="ui-grid-icon-cancel" ui-grid-one-bind-aria-label="aria.removeFilter" style="right:0.5px;">&nbsp;</i></div></div>'
                         case 'multi_select':
                             return '<div class="ui-grid-filter-container"><div ng-dropdown-multiselect="" parent-scope="grid.appScope" data="grid.all_grid_data" add-data="grid.additionalDataForMS[col.name]" send="grid.setGridData" options = "grid.listsForMS[col.name]" selected-model="grid.listOfSelectedFilterGrid"></div></div>'
                         case 'range':
                             return '<div class="ui-grid-filter-container">' +
-                                '<input type="number" class="ui-grid-filter-input ui-grid-filter-input-{{$index}}"  ng-model="col.filters[0].term"  aria-label="{{colFilter.ariaLabel || aria.defaultFilterLabel}}" style="margin-bottom: 10px;width: 100%" placeholder="From:">' +
-                                '<input type="number" class="ui-grid-filter-input ui-grid-filter-input-{{$index}}"  ng-model="col.filters[1].term"  aria-label="{{colFilter.ariaLabel || aria.defaultFilterLabel}}" style="margin-bottom: 5px;width: 100%" placeholder="To:">' +
+                                '<input type="number" class="form-control"  ng-model="col.filters[0].term"  aria-label="{{colFilter.ariaLabel || aria.defaultFilterLabel}}" style="margin-bottom: 10px;width: 100%" placeholder="From:">' +
+                                '<input type="number" class="form-control"  ng-model="col.filters[1].term"  aria-label="{{colFilter.ariaLabel || aria.defaultFilterLabel}}" style="margin-bottom: 5px;width: 100%" placeholder="To:">' +
                                 '<button class="btn btn-group" ng-click="grid.filterForGridRange(col)" ng-disabled="col.filters[1].term === undefined || col.filters[0].term === undefined || col.filters[1].term === null || col.filters[1].term === \'\' || col.filters[0].term === null || col.filters[0].term === \'\'">Filter</button> ' +
                                 '<div role="button" class="ui-grid-filter-button" ng-click="grid.refreshGrid(col)" ng-if="!colFilter.disableCancelFilterButton" ng-disabled="col.filters[1].term === undefined || col.filters[0].term === undefined" ng-show="col.filters[1].term !== undefined && col.filters[1].term !== \'\' && col.filters[0].term !== undefined && col.filters[0].term !== \'\'">' +
                                 '<i class="ui-grid-icon-cancel" ui-grid-one-bind-aria-label="aria.removeFilter" style="right:0.5px;top:83%">&nbsp;</i></div></div>'
+                        case 'button':
+                            return '<div class="ui-grid-filter-container" ng-if="grid.filters_action.' + col.name + '"><button ' +
+                                ' class="btn pr-grid-cell-field-type-actions-action pr-grid-cell-field-type-actions-action-{{ grid.filters_action.' + col.name + ' }}" ' +
+                                ' ng-click="grid.appScope.' + col.filter.onclick + '(row.entity.id,  grid.filters_action.' + col.name + ' , row.entity, \'' + col['name'] + '\')" ' +
+                                ' title="{{ grid.filters_action.' + col.name + ' }}" ng-bind="grid.filters_action.' + col.name + '"></button><span class="grid-filter-info" ng-bind="grid.filters_info.' + col.name + '"></span></div>'
                     }
                 }
 
@@ -1258,38 +1353,45 @@ module.run(function ($rootScope, $ok, $sce, $uibModal, $sanitize, $timeout, $tem
                     if (typeof  col.classes === 'function') {
                         classes_for_row += '{{ grid.options.columnDefs[' + columnindex + '].classes(row.entity.id, row.entity, col.field) }}';
                     }
+
+                    var attributes_for_cell = ' pr-id="{{ row.entity.id }}" ';
+                    if (col.onclick && col.type !== 'actions' && col.type !== 'editable') {
+                        attributes_for_cell += ' ng-click="grid.appScope.' + col.onclick + '(row.entity.id, row.entity, \'' + col['name'] + '\') "';
+                    }
+
                     var prefix_img = '';
                     if (col.img) {
-                        //var imgwidth = col.imgwidth?col.imgwidth:'2em';
                         var prefix_img = '<img class="pr-grid-cell-img-prefix" pr-image="row.entity.' + col.img + '"/>';
-                        //classes_for_row += ' pr-grid-cell-with-img '
                     }
                     switch (col.type) {
                         case 'link':
-                            return '<div pr-id="{{ row.entity.id }}" class="' + classes_for_row + '" title="{{ COL_FIELD }}">' + prefix_img + '<a ' + (col.target ? (' target="' + col.target + '" ') : '') + ' href="{{' + 'grid.appScope.' + col.href + '}}"><i ng-if="' + col.link + '" class="fa fa-external-link" style="font-size: 12px"></i> {{COL_FIELD}}</a></div>';
+                            return '<div  ' + attributes_for_cell + ' ng-style="grid.appScope.' + col.cellStyle + '" pr-test="Grid-' + col.name + '" class="' + classes_for_row + '" title="{{ COL_FIELD }}">' + prefix_img + '<a ng-style="grid.appScope.' + col.cellStyle + '"' + attributes_for_cell + ' ' + (col.target ? (' target="' + col.target + '" ') : '') + ' href="{{' + 'grid.appScope.' + col.href + '}}"><i ng-if="' + col.link + '" class="fa fa-external-link" style="font-size: 12px"></i>{{COL_FIELD}}</a></div>';
                         case 'img':
-                            return '<div pr-id="{{ row.entity.id }}" class="' + classes_for_row + '" style="text-align:center;">' + prefix_img + '<img ng-src="{{ COL_FIELD }}" alt="image" style="background-position: center; height: 30px;text-align: center; background-repeat: no-repeat;background-size: contain;"></div>';
+                            return '<div  ' + attributes_for_cell + '  pr-test="Grid-' + col.name + '" class="' + classes_for_row + '" style="text-align:center;">' + prefix_img + '<img ng-src="{{ COL_FIELD }}" alt="image" style="background-position: center; height: 30px;text-align: center; background-repeat: no-repeat;background-size: contain;"></div>';
+                        case 'tags':
+                            return '<div  ' + attributes_for_cell + '  pr-test="Grid-' + col.name + '" class="' + classes_for_row + '">' + prefix_img + '<span ng-repeat="tag in COL_FIELD"' +
+                                ' class="m025em label label-danger">{{ tag.text }}</span></div>';
                         case 'show_modal':
-                            return '<div pr-id="{{ row.entity.id }}" class="' + classes_for_row + '" title="{{ COL_FIELD }}">' + prefix_img + '<a ng-click="' + col.modal + '" ng-bind="COL_FIELD"></a></div>';
+                            return '<div  ' + attributes_for_cell + '  pr-test="Grid-' + col.name + '" class="' + classes_for_row + '" title="{{ COL_FIELD }}">' + prefix_img + '<a ng-click="' + col.modal + '" ng-bind="COL_FIELD"></a></div>';
                         case 'actions':
-                            return '<div pr-id="{{ row.entity.id }}" class="' + classes_for_row + '">' + prefix_img + '<button ' +
+                            return '<div  ' + attributes_for_cell + '  pr-test="Grid-' + col.name + '" class="' + classes_for_row + '">' + prefix_img + '<button ' +
                                 ' class="btn pr-grid-cell-field-type-actions-action pr-grid-cell-field-type-actions-action-{{ action_name }}" ' +
-                                ' ng-repeat="(action_name, enabled) in COL_FIELD" ng-disabled="enabled !== true" ' +
+                                ' ng-repeat="(action_name, enabled) in COL_FIELD" ng-disabled="enabled !== true" ng-style="{width:grid.getLengthOfAssociativeArray(COL_FIELD)>3?\'2.5em\':\'5em\'}"' +
                                 ' ng-click="grid.appScope.' + col['onclick'] + '(row.entity.id, \'{{ action_name }}\', row.entity, \'' + col['name'] + '\')" ' +
                                 ' title="{{ grid.appScope._((enabled === true)?(action_name + \' grid action\'):enabled) }}">{{ grid.appScope._(action_name + \' grid action\') }}</button></div>';
                         case 'icons':
-                            return '<div pr-id="{{ row.entity.id }}" class="' + classes_for_row + '">' + prefix_img + '<i ng-class="{disabled: !icon_enabled}" ' +
+                            return '<div  ' + attributes_for_cell + '  pr-test="Grid-' + col.name + '" class="' + classes_for_row + '">' + prefix_img + '<i ng-class="{disabled: !icon_enabled}" ' +
                                 'class="pr-grid-cell-field-type-icons-icon pr-grid-cell-field-type-icons-icon-{{ icon_name }}" ng-repeat="(icon_name, icon_enabled) in COL_FIELD" ng-click="grid.appScope.' + col['onclick'] + '(row.entity.id, \'{{ icon_name }}\', row.entity, \'' + col['name'] + '\')" title="{{ grid.appScope._(\'grid icon \' + icon_name) }}"></i></div>';
                         case 'editable':
                             if (col.multiple === true && col.rule) {
-                                return '<div pr-id="{{ row.entity.id }}" class="' + classes_for_row + '" ng-if="grid.appScope.' + col.rule + '=== false" title="{{ COL_FIELD }}">' + prefix_img + '{{ COL_FIELD }}</div><div ng-if="grid.appScope.' + col.rule + '"><div ng-click="' + col.modal + '" title="{{ COL_FIELD }}" id=\'grid_{{row.entity.id}}\'>{{ COL_FIELD }}</div></div>';
+                                return '<div  ' + attributes_for_cell + '  pr-test="Grid-' + col.name + '" class="' + classes_for_row + '" ng-if="grid.appScope.' + col.rule + '=== false" title="{{ COL_FIELD }}">' + prefix_img + '{{ COL_FIELD }}</div><div ng-if="grid.appScope.' + col.rule + '"><div ng-click="' + col.modal + '" title="{{ COL_FIELD }}" id=\'grid_{{row.entity.id}}\'>{{ COL_FIELD }}</div></div>';
                             }
                             if (col.subtype && col.subtype === 'tinymce') {
-                                return '<div pr-id="{{ row.entity.id }}" class="' + classes_for_row + '" ng-click="' + col.modal + '" title="{{ COL_FIELD }}" id=\'grid_{{row.entity.id}}\'>' + prefix_img + '{{ COL_FIELD }}</div>';
+                                return '<div  ' + attributes_for_cell + '  pr-test="Grid-' + col.name + '" class="' + classes_for_row + '" ng-click="' + col.modal + '" title="{{ COL_FIELD }}" id=\'grid_{{row.entity.id}}\'>' + prefix_img + '{{ COL_FIELD }}</div>';
                             }
                         //TODO: SS by OZ: what is returned when neither of two above contitions is true?
                         default:
-                            return '<div pr-id="{{ row.entity.id }}" class="' + classes_for_row + '" title="{{ COL_FIELD }}">' + prefix_img + '{{ COL_FIELD }}</div>';
+                            return '<div  ' + attributes_for_cell + '  pr-test="Grid-' + col.name + '" class="' + classes_for_row + '" title="{{ COL_FIELD }}">' + prefix_img + '{{ COL_FIELD }}</div>';
 
                     }
                 }
@@ -1316,6 +1418,10 @@ module.run(function ($rootScope, $ok, $sce, $uibModal, $sanitize, $timeout, $tem
 
             }
 
+            gridApi.grid['getLengthOfAssociativeArray'] = function (array) {
+                return Object.keys(array).length
+            };
+
             gridApi.grid['searchItemGrid'] = function (col) {
                 //highLightSubstring(col.filter.text, 'ui-grid-canvas',col.field)
                 gridApi.grid.all_grid_data.paginationOptions.pageNumber = 1;
@@ -1323,47 +1429,65 @@ module.run(function ($rootScope, $ok, $sce, $uibModal, $sanitize, $timeout, $tem
                 gridApi.grid.setGridData()
             };
 
-            gridApi.grid['setGridData'] = function (grid_data) {
-                var all_grid_data = grid_data ? grid_data : gridApi.grid.all_grid_data
-
-                gridApi.grid.options.loadGridData(all_grid_data, function (grid_data) {
-                    //scope.initGridData = grid_data;
-                    gridApi.grid.options.data = grid_data.grid_data;
-                    if ('grid_data' in grid_data) {
-                        scope.initGridData = grid_data
-                    } else {
-                        for (var z = 0; z < grid_data.length; z++) {
-
+            gridApi.grid['grid_change_row'] = function(new_row) {
+                $.each(gridApi.grid.options.data, function (index, old_row) {
+                    if (old_row['id'] === new_row['id']) {
+                        if(new_row.hasOwnProperty('replace_id')){
+                            new_row['id'] = new_row['replace_id']
                         }
-                    }
-                    gridApi.grid.listsForMS = {};
-                    gridApi.grid.options.totalItems = grid_data.total;
-                    if (grid_data.page) {
-                        gridApi.grid.options.pageNumber = grid_data.page;
-                        gridApi.grid.options.paginationCurrentPage = grid_data.page;
-                    }
-                    $timeout(function () {
-                        $(".ui-grid-filter-select option[value='']").remove();
-                    }, 0);
-                    for (var i = 0; i < col.length; i++) {
-                        if (col[i].filter) {
-                            if (col[i].filter.type === 'select') {
-                                gridApi.grid.options.columnDefs[i]['filter']['selectOptions'] = grid_data.grid_filters[col[i].name]
-                            } else if (col[i].filter.type === 'multi_select') {
-                                gridApi.grid.options.columnDefs[i]['filter']['selectOptions'] = grid_data.grid_filters[col[i].name];
-                                gridApi.grid.listsForMS[col[i].name] = grid_data.grid_filters[col[i].name].slice(1);
-                            }
-                        }
-                    }
-                    for (var m = 0; m < grid_data.grid_data.length; m++) {
-                        if (grid_data.grid_data[m]['level'])
-                            grid_data.grid_data[m].$$treeLevel = 0
-                    }
-                    if (gridApi.grid.all_grid_data) {
-                        gridApi.grid.all_grid_data['editItem'] = {};
+                        gridApi.grid.options.data[index] = new_row;
                     }
                 });
             };
+
+            gridApi.grid['set_data_function'] = function (grid_data) {
+                gridApi.grid.options.data = grid_data.grid_data;
+                gridApi.grid.filters_init_exception = grid_data.grid_filters_except
+                gridApi.grid.listsForMS = {};
+                gridApi.grid.options.totalItems = grid_data.total;
+                if (grid_data.page) {
+                    gridApi.grid.options.pageNumber = grid_data.page;
+                    gridApi.grid.options.paginationCurrentPage = grid_data.page;
+                }
+                $timeout(function () {
+                    $(".ui-grid-filter-select option[value='']").remove();
+                }, 0);
+                for (var i = 0; i < col.length; i++) {
+                    if (col[i].filter) {
+                        if (col[i].filter.type === 'select') {
+                            gridApi.grid.options.columnDefs[i]['filter']['selectOptions'] = grid_data.grid_filters[col[i].name]
+                        } else if (col[i].filter.type === 'multi_select') {
+                            gridApi.grid.options.columnDefs[i]['filter']['selectOptions'] = grid_data.grid_filters[col[i].name];
+                            gridApi.grid.listsForMS[col[i].name] = grid_data.grid_filters[col[i].name].slice(1);
+                        }
+                    }
+                }
+                for (var m = 0; m < grid_data.grid_data.length; m++) {
+                    if (grid_data.grid_data[m]['level'])
+                        grid_data.grid_data[m].$$treeLevel = 0
+                }
+                if (gridApi.grid.all_grid_data) {
+                    gridApi.grid.all_grid_data['editItem'] = {};
+                }
+            }
+
+            gridApi.grid['setGridData'] = function (grid_data) {
+                var all_grid_data = grid_data ? grid_data : gridApi.grid.all_grid_data
+                if (gridApi.grid.options.urlLoadGridData) {
+                    scope.loading = true
+                    $ok(gridApi.grid.options.urlLoadGridData, all_grid_data, function (grid_data) {
+                        gridApi.grid.set_data_function(grid_data)
+                    }).finally(function () {
+                        scope.loading = false
+                    })
+                } else {
+                    gridApi.grid.options.loadGridData(all_grid_data, function (grid_data) {
+                        gridApi.grid.set_data_function(grid_data)
+                    })
+                }
+
+            };
+
 
             if (!gridApi.grid.load_contr) {
                 gridApi.grid.load_contr = true;
@@ -1539,6 +1663,45 @@ module.run(function ($rootScope, $ok, $sce, $uibModal, $sanitize, $timeout, $tem
                 }
             });
         },
+        loadNextPage: function (url) {
+            var scope = this;
+            scope.next_page = 1;
+            $(window).scroll(function () {
+                if ($(window).scrollTop() >= $(document).height() - $(window).height() - 10) {
+
+                    if (scope.loading === false && scope.data.end !== true) {
+
+                        scope.loading = true;
+                        scope.next_page += 1;
+                        if (scope.scroll_data) {
+                            scope.scroll_data.next_page = scope.next_page
+                        }
+                        load()
+                    }
+                }
+            });
+            $timeout(function () {
+                if (scope.data.end === false && ($(document).height() - $(window).height() === 0)) {
+                    scope.next_page += 1;
+                    load()
+                }
+            }, 500);
+            var load = function () {
+                $ok(url, scope.scroll_data ? scope.scroll_data : {next_page: scope.next_page}, function (resp) {
+                    scope.data = resp;
+                    if (scope.data.end)
+                        scope.next_page = 1
+                }).finally(function () {
+                    $timeout(function () {
+                        scope.loading = false;
+                        if ($(document).height() - $(window).height() === 0 && !scope.data.end) {
+                            scope.next_page += 1;
+                            load()
+                        }
+                    }, 1000)
+                });
+            }
+        },
         dateOptions: {
             formatYear: 'yy',
             startingDay: 1
@@ -1546,6 +1709,7 @@ module.run(function ($rootScope, $ok, $sce, $uibModal, $sanitize, $timeout, $tem
         tinymceImageOptions: {
             inline: false,
             menu: [],
+            width: 750,
             plugins: 'advlist autolink link image charmap print paste table media',
             skin: 'lightgray',
             theme: 'modern',
@@ -1577,6 +1741,7 @@ module.run(function ($rootScope, $ok, $sce, $uibModal, $sanitize, $timeout, $tem
             },
             //valid_elements: Config['article_html_valid_elements'],
             //valid_elements: 'a[class],img[class|width|height],p[class],table[class|width|height],th[class|width|height],tr[class],td[class|width|height],span[class],div[class],ul[class],ol[class],li[class]',
+            //TODO: OZ by OZ: select css for current theme. also look for another place with same todo
             content_css: ["//static.profireader.com/static/front/css/bootstrap.css", "//static.profireader.com/static/css/article.css", "//static.profireader.com/static/front/bird/css/article.css"],
 
 
@@ -1623,7 +1788,7 @@ function cleanup_html(html) {
         '^table$': {allow: '^(tr)$', attributes: {whattr: true}},
         '^tr$': {allow: '^(td|th)$', attributes: {}},
         '^td$': {allow: normaltags, attributes: {whattr: true}},
-        '^a$': {allow: '^(span)$', attributes: {'^href$': '.*'}},
+        '^a$': {allow: '^(span)$', attrсibutes: {'^href$': '.*'}},
         '^img$': {allow: false, attributes: {'^src$': '.*'}},
         '^br$': {allow: false, attributes: {}},
         '^div$': {allow: normaltags, attributes: {}}
@@ -1660,6 +1825,26 @@ $.fn.scrollTo = function () {
     });
 }
 
+function getPopoverContent(content_list, width) {
+    if (content_list.length === 0) {
+        return '';
+    }
+    $('.liked-favorite-band .popover').css({
+        'background-color': 'black', 'color': 'white',
+        'width': width ? width.toString() : '160' + 'px', 'overflow': 'hidden'
+    })
+    var content = '';
+    var limit = width ? width : 160 / 10;
+    for (var i = 0; i < content_list.length; i += 1) {
+        if (content_list[i].length > limit) {
+            content += '<spam class="ellipsis">' + content_list[i].substring(0, limit) + '...' + '</spam><br>';
+        } else {
+            content += '<spam class="ellipsis">' + content_list[i] + '</spam><br>';
+        }
+    }
+    return content
+}
+
 function scrool($el) {
     $($el).scrollTo();
 }
@@ -1669,18 +1854,17 @@ function highlight($el) {
     setTimeout(function () {
         $($el).removeClass('highlight');
     }, 3500);
-}
+};
 
 
 function highLightSubstring(substring, block, element) {
     var elements = element.split('&');
     var re = new RegExp(substring, "gi");
-    $("." + block).find(".search-highlight").remove()
+    $("." + block).find(".search-highlight").remove();
     $.each(elements, function (index) {
-        var el = elements[index]
-        console.log(el);
+        var el = elements[index];
         $("." + block).find("#" + el).each(function () {
-            var rex = $(this).html().match(re)
+            var rex = $(this).html().match(re);
             $(this).html($(this).html().replace(re, '<span class="search-highlight">' + rex[0] + '</span>'));
         })
     })
@@ -1717,8 +1901,13 @@ function cloneObject(o) {
     return (o === null || typeof o !== 'object') ? o : $.extend(true, {}, o);
 }
 
-function add_message(amessage, atype, atime) {
-    return angularControllerFunction('message-controller', 'add_message')(amessage, atype, atime);
+function add_message(amessage, atype, atime, aunique_id) {
+    return angularControllerFunction('message-controller', 'add_message')(amessage, atype, atime, aunique_id);
+}
+
+
+function getLengthOfAssociativeArray(array) {
+    return Object.keys(array).length
 }
 
 function randomHash() {
