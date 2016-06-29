@@ -1,31 +1,26 @@
 from sqlalchemy import Column, ForeignKey, text
 from sqlalchemy.orm import relationship, aliased, backref
-from sqlalchemy.sql import expression
 from ..constants.TABLE_TYPES import TABLE_TYPES
-# from db_init import db_session
 from ..models.company import Company, UserCompany
-from ..models.portal import PortalDivision, Portal, PortalDivisionType, MemberCompanyPortal
+from ..models.portal import PortalDivision, Portal
 from ..models.users import User
-from ..models.files import File, FileContent
-from ..models.tag import Tag, TagPortalDivision, TagPortalDivisionArticle
-from config import Config
-# from ..models.tag import Tag
-from utils.db_utils import db
-from .pr_base import PRBase, Base, MLStripper, Search, Grid
-# from db_init import Base
+from ..models.files import File
+from ..models.tag import Tag, TagPortalDivision, TagPublication
+from .pr_base import PRBase, Base, MLStripper, Grid
 from utils.db_utils import db
 from flask import g, session
 from sqlalchemy.sql import or_, and_
-from sqlalchemy.sql import expression
 import re
 from sqlalchemy import event
-from ..controllers import errors
 from ..constants.SEARCH import RELEVANCE
 from datetime import datetime
-from flask import redirect, url_for
+from .files import ImageCroped
+from .. import utils
+from ..constants.FILES_FOLDERS import FOLDER_AND_FILE
+from .elastic import PRElasticField, PRElasticDocument, elasticsearch
 
 
-class ArticlePortalDivision(Base, PRBase):
+class ArticlePortalDivision(Base, PRBase, PRElasticDocument):
     __tablename__ = 'article_portal_division'
     id = Column(TABLE_TYPES['id_profireader'], primary_key=True, nullable=False)
     article_company_id = Column(TABLE_TYPES['id_profireader'], ForeignKey('article_company.id'))
@@ -39,17 +34,24 @@ class ArticlePortalDivision(Base, PRBase):
     short = Column(TABLE_TYPES['text'], default='')
     long = Column(TABLE_TYPES['text'], default='')
     long_stripped = Column(TABLE_TYPES['text'], nullable=False)
+
     keywords = Column(TABLE_TYPES['keywords'], nullable=False)
+    author = Column(TABLE_TYPES['short_name'], nullable=False)
     md_tm = Column(TABLE_TYPES['timestamp'])
     publishing_tm = Column(TABLE_TYPES['timestamp'])
-    event_tm = Column(TABLE_TYPES['timestamp'])
+    event_begin_tm = Column(TABLE_TYPES['timestamp'])
+    event_end_tm = Column(TABLE_TYPES['timestamp'])
     position = Column(TABLE_TYPES['position'])
     read_count = Column(TABLE_TYPES['int'], default=0)
+    search_reindexed = Column(TABLE_TYPES['int'], default=0)
+
+    tags = relationship(Tag, secondary='tag_publication', uselist=True)
 
     status = Column(TABLE_TYPES['status'], default='SUBMITTED')
     STATUSES = {'SUBMITTED': 'SUBMITTED', 'UNPUBLISHED': 'UNPUBLISHED', 'PUBLISHED': 'PUBLISHED', 'DELETED': 'DELETED'}
 
-    visibility = Column(TABLE_TYPES['status'], default='REGISTERED')
+    visibility = Column(TABLE_TYPES['status'], default='OPEN')
+    like_count = Column(TABLE_TYPES['int'], default=0)
     VISIBILITIES = {'OPEN': 'OPEN', 'REGISTERED': 'REGISTERED', 'PAYED': 'PAYED', 'CONFIDENTIAL': 'CONFIDENTIAL'}
 
     division = relationship('PortalDivision',
@@ -65,106 +67,65 @@ class ArticlePortalDivision(Base, PRBase):
                      'short': {'relevance': lambda field='short': RELEVANCE.short},
                      'long': {'relevance': lambda field='long': RELEVANCE.long},
                      'keywords': {'relevance': lambda field='keywords': RELEVANCE.keywords}}
-    tag_assoc_select = relationship('TagPortalDivisionArticle',
-                                    back_populates='article_portal_division_select',
-                                    cascade="save-update, merge, delete, delete-orphan",
-                                    passive_deletes=True
-                                    )
 
-    ACTIONS = {
-        'PUBLISH': 'PUBLISH',
-        'UNPUBLISH': 'UNPUBLISH',
-        'EDIT': 'EDIT',
-        'REPUBLISH': 'REPUBLISH',
-        'DELETE': 'DELETE',
-        'UNDELETE': 'UNDELETE'
-    }
-
-    delete_rights = {'membership': [MemberCompanyPortal.RIGHT_AT_PORTAL._OWNER],
-                     'employment': [UserCompany.RIGHT_AT_COMPANY.ARTICLES_DELETE]}
-
-    publish_rights = {'membership': [MemberCompanyPortal.RIGHT_AT_PORTAL._OWNER],
-                      'employment': [UserCompany.RIGHT_AT_COMPANY.ARTICLES_DELETE]}
-
-    unpublish_rights = {'membership': [MemberCompanyPortal.RIGHT_AT_PORTAL.PUBLICATION_UNPUBLISH],
-                        'employment': [UserCompany.RIGHT_AT_COMPANY.ARTICLES_UNPUBLISH]}
-
-    republish_rights = {'membership': [MemberCompanyPortal.RIGHT_AT_PORTAL.PUBLICATION_PUBLISH,
-                                       MemberCompanyPortal.RIGHT_AT_PORTAL.PUBLICATION_UNPUBLISH],
-                        'employment': [UserCompany.RIGHT_AT_COMPANY.ARTICLES_UNPUBLISH,
-                                       UserCompany.RIGHT_AT_COMPANY.ARTICLES_SUBMIT_OR_PUBLISH]}
-
-    ACTIONS_FOR_STATUSES = {
-        STATUSES['SUBMITTED']: {
-            ACTIONS['PUBLISH']: publish_rights,
-            ACTIONS['DELETE']: delete_rights,
-        },
-        STATUSES['PUBLISHED']: {
-            ACTIONS['REPUBLISH']: republish_rights,
-            ACTIONS['UNPUBLISH']: unpublish_rights,
-            ACTIONS['EDIT']: publish_rights,
-            ACTIONS['DELETE']: delete_rights
-        },
-        STATUSES['UNPUBLISHED']: {
-            ACTIONS['REPUBLISH']: publish_rights,
-            ACTIONS['EDIT']: republish_rights,
-            ACTIONS['DELETE']: delete_rights
-        },
-        STATUSES['DELETED']: {
-            ACTIONS['UNPUBLISH']: delete_rights,
+    # elasticsearch begin
+    def elastic_get_fields(self):
+        return {
+            'id': PRElasticField(analyzed=False, setter=lambda: self.id),
+            'title': PRElasticField(setter=lambda: self.title, boost=10),
+            'author': PRElasticField(setter=lambda: self.author, boost=10),
+            'subtitle': PRElasticField(setter=lambda: self.subtitle, boost=4),
+            'keywords': PRElasticField(setter=lambda: self.keywords, boost=3),
+            'short': PRElasticField(setter=lambda: self.short, boost=2),
+            'long': PRElasticField(setter=lambda: self.long),
+            'tags': PRElasticField(analyzed=False, setter=lambda: ' '.join([t.text for t in self.tags])),
+            'tag_ids': PRElasticField(analyzed=False, setter=lambda: [t.id for t in self.tags]),
+            'date': PRElasticField(ftype='date', setter=lambda: int(self.publishing_tm.timestamp() * 1000)),
+            'user': PRElasticField(analyzed=False),
+            'user_id': PRElasticField(analyzed=False),
+            'portal': PRElasticField(setter=lambda: self.portal.name),
+            'portal_id': PRElasticField(analyzed=False, setter=lambda: self.portal.id),
+            'division': PRElasticField(setter=lambda: self.division.name),
+            'portal_division_id': PRElasticField(analyzed=False, setter=lambda: self.division.id)
         }
-    }
 
-    def action_is_allowed(self, action_name, employment, membership):
+    def elastic_get_index(self):
+        return 'articles'
 
-        if not employment:
-            return "Unconfirmed employment"
+    def elastic_get_doctype(self):
+        return 'articles'
 
-        if not membership:
-            return "Unconfirmed membership"
+    def elastic_get_id(self):
+        return self.id
 
-        if not action_name in self.ACTIONS:
-            return "Unrecognized publication action `{}`".format(action_name)
+    @classmethod
+    def elastic_remove_all_indexes(cls):
+        return elasticsearch.remove_index('articles')
 
-        if not self.status in self.ACTIONS_FOR_STATUSES:
-            return "Unrecognized publication status `{}`".format(self.status)
+    # elasticsearch end
 
-        if not action_name in self.ACTIONS_FOR_STATUSES[self.status]:
-            return "Action `{}` is not applicable for publication with status `{}`".format(action_name, self.status)
 
-        if employment.status != UserCompany.STATUSES['ACTIVE']:
-            return "User need employment with status `{}` to perform action `{}`".format(
-                    UserCompany.STATUSES['ACTIVE'], action_name)
-
-        if membership.status != MemberCompanyPortal.STATUSES['ACTIVE']:
-            return "Company need membership with status `{}` to perform action `{}`".format(
-                    MemberCompanyPortal.STATUSES['ACTIVE'], action_name)
-
-        required_rights = self.ACTIONS_FOR_STATUSES[self.status][action_name]
-
-        if 'employment' in required_rights:
-            for required_right in required_rights['employment']:
-                if not employment.has_rights(required_right):
-                    return "Employment need right `{}` to perform action `{}`".format(required_right, action_name)
-
-        if 'membership' in required_rights:
-            for required_right in required_rights['membership']:
-                if not membership.has_rights(required_right):
-                    return "Membership need right `{}` to perform action `{}`".format(required_right, action_name)
-
+    def is_active(self):
         return True
 
-    def actions(self, company):
-
-        employment = UserCompany.get(company_id=company.id)
-        membership = MemberCompanyPortal.get(portal_id=self.division.portal_id, company_id=company.id)
-
-        return {action_name: self.action_is_allowed(action_name, employment, membership) for action_name in
-                self.ACTIONS_FOR_STATUSES[self.status]}
-
-    def check_favorite_status(self, user_id):
-        return db(ReaderArticlePortalDivision, user_id=user_id, article_portal_division_id=self.id,
+    def check_favorite_status(self, user_id=None):
+        return db(ReaderArticlePortalDivision, user_id=user_id if user_id else g.user.id if g.user else None,
+                  article_portal_division_id=self.id,
                   favorite=True).count() > 0
+
+    def check_liked_status(self, user_id=None):
+        return db(ReaderArticlePortalDivision, user_id=user_id if user_id else g.user.id if g.user else None,
+                  article_portal_division_id=self.id,
+                  liked=True).count() > 0
+
+    def check_liked_count(self):
+        return db(ReaderArticlePortalDivision, article_portal_division_id=self.id, liked=True).count()
+
+    def like_dislike_user_article(self, liked):
+        article = db(ReaderArticlePortalDivision, article_portal_division_id=self.id,
+                     user_id=g.user.id if g.user else None).one()
+        article.favorite = True if liked else False
+        self.like_count += 1
 
     def search_filter_default(self, division_id, company_id=None):
         """ :param division_id: string with id from table portal_division,
@@ -174,13 +135,13 @@ class ArticlePortalDivision(Base, PRBase):
         division = db(PortalDivision, id=division_id).one()
         division_type = division.portal_division_type.id
         visibility = ArticlePortalDivision.visibility.in_(ArticlePortalDivision.articles_visibility_for_user(
-                portal_id=division.portal_id)[0])
+            portal_id=division.portal_id)[0])
         filter = None
         if division_type == 'index':
             filter = {'class': ArticlePortalDivision,
                       'filter': and_(ArticlePortalDivision.portal_division_id.in_(db(
-                              PortalDivision.id, portal_id=division.portal_id).filter(
-                              PortalDivision.portal_division_type_id != 'events'
+                          PortalDivision.id, portal_id=division.portal_id).filter(
+                          PortalDivision.portal_division_type_id != 'events'
                       )), ArticlePortalDivision.status == ArticlePortalDivision.STATUSES['PUBLISHED'], visibility),
                       'return_fields': 'default_dict', 'tags': True}
         elif division_type == 'news':
@@ -215,20 +176,11 @@ class ArticlePortalDivision(Base, PRBase):
                           'return_fields': 'default_dict', 'tags': True}
         return filter
 
-    @property
-    def tags(self):
-        query = g.db.query(Tag.name). \
-            join(TagPortalDivision). \
-            join(TagPortalDivisionArticle). \
-            filter(TagPortalDivisionArticle.article_portal_division_id == self.id)
-        tags = list(map(lambda x: x[0], query.all()))
-        return tags
-
     def add_recently_read_articles_to_session(self):
-        if self.id not in (session.get('recently_read_articles') or []):
+        if self.id not in session.get('recently_read_articles', []):
             self.read_count += 1
-        session['recently_read_articles'] = list(filter(bool,
-                                                        set((session.get('recently_read_articles') or []) + [self.id])))
+        session['recently_read_articles'] = list(
+            filter(bool, set(session.get('recently_read_articles', []) + [self.id])))
 
     portal = relationship('Portal',
                           secondary='portal_division',
@@ -238,7 +190,8 @@ class ArticlePortalDivision(Base, PRBase):
                           uselist=False)
 
     def __init__(self, article_company_id=None, title=None, short=None, keywords=None, position=None,
-                 long=None, status=None, portal_division_id=None, image_file_id=None, subtitle=None):
+                 long=None, status=None, portal_division_id=None, image_file_id=None, subtitle=None,
+                 like_count=None):
         self.article_company_id = article_company_id
         self.title = title
         self.subtitle = subtitle
@@ -249,7 +202,10 @@ class ArticlePortalDivision(Base, PRBase):
         self.status = status
         self.position = position
         self.portal_division_id = portal_division_id
+        self.like_count = like_count
         # self.portal_id = portal_id
+
+
 
     @staticmethod
     def articles_visibility_for_user(portal_id):
@@ -257,7 +213,7 @@ class ArticlePortalDivision(Base, PRBase):
         visibilities = ArticlePortalDivision.VISIBILITIES.copy()
         if not db(UserCompany, user_id=getattr(g.user, 'id', None),
                   status=UserCompany.STATUSES['ACTIVE']).filter(
-                        UserCompany.company_id == db(Portal.company_owner_id, id=portal_id)).count():
+                    UserCompany.company_id == db(Portal.company_owner_id, id=portal_id)).count():
             visibilities.pop(ArticlePortalDivision.VISIBILITIES['CONFIDENTIAL'])
             employer = False
         return visibilities.keys(), employer
@@ -282,10 +238,11 @@ class ArticlePortalDivision(Base, PRBase):
                    }
         return actions[self.visibility]()
 
-    def get_client_side_dict(self, fields='id|image_file_id|read_count|title|subtitle|short|long_stripped|'
+    def get_client_side_dict(self, fields='id|image_file_id|read_count|title|subtitle|short|long_stripped|tags|author|'
                                           'portal_division_id|image_file_id|position|keywords|cr_tm|md_tm|status|'
-                                          'visibility|publishing_tm|event_tm,company.id|name, division.id|'
-                                          'name, portal.id|name|host',
+                                          'visibility|publishing_tm|event_begin_tm,event_end_tm,company.id|name, '
+                                          'division.id|'
+                                          'name|portal_id, portal.id|name|host',
                              more_fields=None):
         return self.to_dict(fields, more_fields)
 
@@ -321,6 +278,24 @@ class ArticlePortalDivision(Base, PRBase):
             companies[article.company.id] = article.company.name
         return companies
 
+    # TODO: SS by OZ: contition `if datetime(*localtime[:6]) > article['publishing_tm']:` should be checked by sql (passed
+    # to search function)
+    @staticmethod
+    def get_list_reader_articles(articles):
+        list_articles = []
+        for article_id, article in articles.items():
+            article['tags'] = [tag.get_client_side_dict() for tag in article['tags']]
+            article['is_favorite'] = ReaderArticlePortalDivision.article_is_favorite(g.user.id, article_id)
+            article['liked'] = ReaderArticlePortalDivision.count_likes(g.user.id, article_id)
+            article['list_liked_reader'] = ReaderArticlePortalDivision.get_list_reader_liked(article_id)
+            article['company']['logo'] = File().get(articles[article_id]['company']['logo_file_id']).url() if \
+                articles[article_id]['company']['logo_file_id'] else utils.fileUrl(FOLDER_AND_FILE.no_company_logo())
+            article['portal']['logo'] = File().get(articles[article_id]['portal']['logo_file_id']).url() if \
+                articles[article_id]['portal']['logo_file_id'] else utils.fileUrl(FOLDER_AND_FILE.no_company_logo())
+            del articles[article_id]['company']['logo_file_id'], articles[article_id]['portal']['logo_file_id']
+            list_articles.append(article)
+        return list_articles
+
     # def clone_for_company(self, company_id):
     #     return self.detach().attr({'company_id': company_id,
     #                                'status': ARTICLE_STATUS_IN_COMPANY.
@@ -333,13 +308,13 @@ class ArticlePortalDivision(Base, PRBase):
         list_sorts = []
         if 'publication_status' in filters:
             list_filters.append(
-                    {'type': 'select', 'value': filters['publication_status'], 'field': ArticlePortalDivision.status})
+                {'type': 'select', 'value': filters['publication_status'], 'field': ArticlePortalDivision.status})
         if 'company' in filters:
             sub_query = sub_query.join(ArticlePortalDivision.company)
             list_filters.append({'type': 'select', 'value': filters['company'], 'field': Company.id})
         if 'date' in filters:
             list_filters.append(
-                    {'type': 'date_range', 'value': filters['date'], 'field': ArticlePortalDivision.publishing_tm})
+                {'type': 'date_range', 'value': filters['date'], 'field': ArticlePortalDivision.publishing_tm})
         sub_query = sub_query. \
             join(ArticlePortalDivision.division). \
             join(PortalDivision.portal). \
@@ -353,22 +328,6 @@ class ArticlePortalDivision(Base, PRBase):
         sub_query = Grid.subquery_grid(sub_query, list_filters, list_sorts)
         return sub_query
 
-    def manage_article_tags(self, new_tags):
-        self.tag_assoc_select = []
-        g.db.add(self)
-        g.db.commit()  # TODO (AA to AA): this solution solves the problem but we MUST find another one to avoid commit on this stage!
-        tags_portal_division_article = []
-        for i in range(len(new_tags)):
-            tag_portal_division_article = TagPortalDivisionArticle(position=i + 1)
-            tag_portal_division = \
-                g.db.query(TagPortalDivision). \
-                    select_from(TagPortalDivision). \
-                    join(Tag). \
-                    filter(TagPortalDivision.portal_division_id == self.portal_division_id). \
-                    filter(Tag.name == new_tags[i]).one()
-            tag_portal_division_article.tag_portal_division = tag_portal_division
-            tags_portal_division_article.append(tag_portal_division_article)
-        self.tag_assoc_select = tags_portal_division_article
 
     def position_unique_filter(self):
         return and_(ArticlePortalDivision.portal_division_id == self.portal_division_id,
@@ -376,6 +335,8 @@ class ArticlePortalDivision(Base, PRBase):
 
     def validate(self, is_new):
         ret = super().validate(is_new)
+        if (self.omit_validation):
+            return ret
 
         if not self.publishing_tm:
             ret['errors']['publishing_tm'] = 'Please select publication date'
@@ -385,15 +346,58 @@ class ArticlePortalDivision(Base, PRBase):
         else:
             portalDivision = PortalDivision.get(self.portal_division_id)
             if portalDivision.portal_division_type_id == 'events':
-                if not self.event_tm:
-                    ret['errors']['event_tm'] = 'Please select event date'
-                elif self.event_tm and datetime.now() > self.event_tm:
-                    ret['warnings']['event_tm'] = 'Event time in past'
+                if not self.event_begin_tm:
+                    ret['errors']['event_begin_tm'] = 'Please select event start date'
+                elif self.event_begin_tm and datetime.now() > self.event_begin_tm:
+                    ret['warnings']['event_begin_tm'] = 'Event start time in past'
 
-        # if not self.event_tm:
-        #     ret['errors']['event_tm'] = 'Please select event date'
+                if not self.event_end_tm:
+                    ret['errors']['event_end_tm'] = 'Please select event end date'
+                elif self.event_end_tm and self.event_begin_tm and self.event_begin_tm > self.event_end_tm:
+                    ret['warnings']['event_end_tm'] = 'Event end time before event begin time'
+
+        if ret['errors']:
+            ret['errors']['_'] = 'You have some error'
+        else:
+            ret['notices']['_'] = 'Ok, you can click submit'
 
         return ret
+
+    def get_image_client_side_dict(self):
+        return Article.get_image_client_side_dict(self)
+
+    def set_image_client_side_dict(self, client_data):
+        return Article.set_image_client_side_dict(self, client_data)
+
+    def set_tags_positions(self):
+        tag_position = 0
+        for tag in self.tags:
+            tag_position += 1
+            tag_pub = db(TagPublication).filter(and_(TagPublication.tag_id == tag.id,
+                                                     TagPublication.article_portal_division_id == self.id)).one()
+            tag_pub.position = tag_position
+            tag_pub.save()
+        return self
+
+    @staticmethod
+    def after_insert(mapper=None, connection=None, target=None):
+        pass
+
+    @staticmethod
+    def after_update(mapper=None, connection=None, target=None):
+        target.elastic_replace()
+        pass
+
+    @staticmethod
+    def after_delete(mapper=None, connection=None, target=None):
+        pass
+
+
+    @classmethod
+    def __declare_last__(cls):
+        event.listen(cls, 'after_insert', cls.after_insert)
+        event.listen(cls, 'after_update', cls.after_update)
+        event.listen(cls, 'after_delete', cls.after_delete)
 
 
 class ArticleCompany(Base, PRBase):
@@ -431,90 +435,32 @@ class ArticleCompany(Base, PRBase):
                                               "ArticlePortalDivision."
                                               "article_company_id",
                                   backref='company_article')
+
     search_fields = {'title': {'relevance': lambda field='title': RELEVANCE.title},
                      'short': {'relevance': lambda field='short': RELEVANCE.short},
                      'subtitle': {'relevance': lambda field='subtitle': RELEVANCE.short},
                      'long': {'relevance': lambda field='long': RELEVANCE.long},
                      'keywords': {'relevance': lambda field='keywords': RELEVANCE.keywords}}
 
-    ACTIONS = {
-        'SUBMIT': 'SUBMIT',
-        'EDIT': 'EDIT'
-        # 'DELETE': 'DELETE',
-        # 'UNDELETE': 'UNDELETE'
-    }
-
-    # TODO OZ by OZ: we need lambda function somewhere here and remove ugly code (search for line `move this ugly code to ACTIONS_FOR_STATUSES`)
-    ACTIONS_FOR_STATUSES = {
-        STATUSES['NORMAL']: {
-            ACTIONS['SUBMIT']: {'employment': [UserCompany.RIGHT_AT_COMPANY.ARTICLES_SUBMIT_OR_PUBLISH]
-                                },
-            ACTIONS['EDIT']: {'employment': [UserCompany.RIGHT_AT_COMPANY.ARTICLES_EDIT_OTHERS]
-                              }
-        }
-
-    }
-
-    def action_is_allowed(self, action_name, employment):
-
-        if not employment:
-            return "Unconfirmed employment"
-
-        if not action_name in self.ACTIONS:
-            return "Unrecognized publication action `{}`".format(action_name)
-
-        if not self.status in self.ACTIONS_FOR_STATUSES:
-            return "Unrecognized publication status `{}`".format(self.status)
-
-        if not action_name in self.ACTIONS_FOR_STATUSES[self.status]:
-            return "Action `{}` is not applicable for publication with status `{}`".format(action_name, self.status)
-
-        if employment.status != UserCompany.STATUSES['ACTIVE']:
-            return "User need employment with status `{}` to perform action `{}`".format(
-                    UserCompany.STATUSES['ACTIVE'], action_name)
-
-        # if membership.status != MemberCompanyPortal.STATUSES['ACTIVE']:
-        #     return "Company need membership with status `{}` to perform action `{}`".format(
-        #             MemberCompanyPortal.STATUSES['ACTIVE'], action_name)
-
-        required_rights = self.ACTIONS_FOR_STATUSES[self.status][action_name]
-
-        # TODO: OZ by OZ: move this ugly code to ACTIONS_FOR_STATUSES
-        if action_name == self.ACTIONS['EDIT'] and self.editor_user_id == employment.user_id:
-            return True
-
-        if 'employment' in required_rights:
-            for required_right in required_rights['employment']:
-                if not employment.has_rights(required_right):
-                    return "Employment need right `{}` to perform action `{}`".format(required_right, action_name)
-
-        # if 'membership' in required_rights:
-        #     for required_right in required_rights['membership']:
-        #         if not membership.has_rights(required_right):
-        #             return "Membership need right `{}` to perform action `{}`".format(required_right, action_name)
-
-
+    def is_active(self):
         return True
-
-    def actions(self, company):
-
-        employment = UserCompany.get(company_id=company.id)
-
-        return {action_name: self.action_is_allowed(action_name, employment) for action_name in
-                self.ACTIONS_FOR_STATUSES[self.status]}
 
     def get_client_side_dict(self,
                              fields='id|title|subtitle|short|keywords|cr_tm|md_tm|article_id|image_file_id|company_id',
                              more_fields=None):
         return self.to_dict(fields, more_fields)
 
+    def get_image_client_side_dict(self):
+        return Article.get_image_client_side_dict(self)
+
+    def set_image_client_side_dict(self, client_data):
+        return Article.set_image_client_side_dict(self, client_data)
+
     def validate(self, is_new):
         ret = super().validate(is_new)
-        # TODO: (AA to OZ): regexp doesn't work
-
-        if not re.match('.*\S{3,}.*', self.title):
-            ret['errors']['title'] = 'pls enter title longer than 3 letters'
-        if not re.match('\S+.*', self.keywords):
+        if not re.match('.*\S{2}.*', self.title, re.IGNORECASE):
+            ret['errors']['title'] = 'pls enter tite longer than 2 letters'
+        if not re.match('\S+.*', self.keywords, re.IGNORECASE):
             ret['warnings']['keywords'] = 'pls enter at least one keyword'
         return ret
 
@@ -552,7 +498,7 @@ class ArticleCompany(Base, PRBase):
         article_filter = db(ArticleCompany, article_id=Article.id)
         if 'title' in search_text:
             article_filter = article_filter.filter(ArticleCompany.title.ilike(
-                    "%" + repr(search_text['title']).strip("'") + "%"))
+                "%" + repr(search_text['title']).strip("'") + "%"))
         if 'company' in kwargs['filter'].keys():
             article_filter = article_filter.filter(ArticleCompany.company_id == kwargs['filter']['company'])
         if 'status' in kwargs['filter'].keys():
@@ -560,24 +506,11 @@ class ArticleCompany(Base, PRBase):
         if 'date' in kwargs['sort'].keys():
             sub_query = sub_query.order_by(own_article.md_tm.asc()) if kwargs['sort'][
                                                                            'date'] == 'asc' else sub_query.order_by(
-                    own_article.md_tm.desc())
+                own_article.md_tm.desc())
         else:
             sub_query = sub_query.order_by(own_article.md_tm.desc())
         return sub_query.filter(article_filter.exists())
 
-    # @staticmethod
-    # def subquery_company_materials(company_id = None, **kwargs):
-    #     sub_query = db(ArticleCompany, company_id=company_id)
-    #     if 'filter' in kwargs.keys():
-    #          if 'publication_status' in kwargs['filter'].keys() or 'portals' in kwargs['filter'].keys():
-    #             sub_query = sub_query.join(ArticlePortalDivision,
-    #                                    ArticlePortalDivision.article_company_id == ArticleCompany.id)
-    #             if 'publication_status' in kwargs['filter'].keys():
-    #                 sub_query = sub_query.filter(ArticlePortalDivision.status == kwargs['filter']['publication_status'])
-    #             if 'portals' in kwargs['filter'].keys():
-    #                 sub_query = sub_query.join(PortalDivision,
-    #                                        PortalDivision.id == ArticlePortalDivision.portal_division_id).filter(PortalDivision.portal_id == kwargs['filter']['portals'])
-    #     return sub_query
 
     @staticmethod
     def subquery_company_materials(company_id=None, filters=None, sorts=None):
@@ -608,7 +541,7 @@ class ArticleCompany(Base, PRBase):
             sub_query = sub_query.join(User,
                                        User.id == ArticleCompany.editor_user_id)
             list_filters.append(
-                    {'type': 'text', 'value': filters['editor.profireader_name'], 'field': User.profireader_name})
+                {'type': 'text', 'value': filters['editor.profireader_name'], 'field': User.profireader_name})
         if 'md_tm' in sorts:
             list_sorts.append({'type': 'date', 'value': sorts['md_tm'], 'field': ArticleCompany.md_tm})
         else:
@@ -638,10 +571,7 @@ class ArticleCompany(Base, PRBase):
 
         for file_id in filesintext:
             filesintext[file_id] = \
-                File.get(file_id).copy_file(company_id=company.id,
-                                            root_folder_id=company.system_folder_file_id,
-                                            parent_id=company.system_folder_file_id,
-                                            article_portal_division_id=article_portal_division.id).save().id
+                File.get(file_id).copy_from_cropped_file().id
 
         if self.image_file_id:
             article_portal_division.image_file_id = filesintext[self.image_file_id]
@@ -654,42 +584,6 @@ class ArticleCompany(Base, PRBase):
                                           '://file001.profireader.com/%s/' % (filesintext[old_image_id],))
         return long_text
 
-    # def clone_for_portal(self, portal_division_id, action, tag_names=[]):
-    #
-    #     article_portal_division = \
-    #         ArticlePortalDivision(
-    #                 title=self.title, subtitle=self.subtitle,
-    #                 short=self.short, long=self.long,
-    #                 portal_division_id=portal_division_id,
-    #                 article_company_id=self.id,
-    #                 keywords=self.keywords,
-    #         )
-    #
-    #     article_portal_division.long = \
-    #         self.clone_for_portal_images_and_replace_urls(portal_division_id, article_portal_division)
-    #
-    #     # TODO (AA to AA): old  tag_portal_division_article should be deleted.
-    #     # TagPortalDivisionArticle(article_portal_division_id=None, tag_portal_division_id=None, position=None)
-    #
-    #     # article_portal_division.portal_division_tags = []
-    #     #
-    #     # tags_portal_division_article = []
-    #     # for i in range(len(tag_names)):
-    #     #     tag_portal_division_article = TagPortalDivisionArticle(position=i + 1)
-    #     #     tag_portal_division = \
-    #     #         g.db.query(TagPortalDivision). \
-    #     #             select_from(TagPortalDivision). \
-    #     #             join(Tag). \
-    #     #             filter(TagPortalDivision.portal_division_id == portal_division_id). \
-    #     #             filter(Tag.name == tag_names[i]).one()
-    #     #
-    #     #     tag_portal_division_article.tag_portal_division = tag_portal_division
-    #     #     tags_portal_division_article.append(tag_portal_division_article)
-    #     # article_portal_division.tag_assoc_select = tags_portal_division_article
-    #
-    #
-    #
-    #     return self
 
     def get_article_owner_portal(self, **kwargs):
         return [art_port_div.division.portal for art_port_div in self.portal_article if kwargs][0]
@@ -748,7 +642,7 @@ class Article(Base, PRBase):
                                                                                      filter_by(company_id=Company.id,
                                                                                                article_id=article_id).
                                                                                      exists()).filter(
-                Company.name.ilike("%" + searchtext + "%")).all()]
+            Company.name.ilike("%" + searchtext + "%")).all()]
 
     @staticmethod
     def save_edited_version(user_id, article_company_id, **kwargs):
@@ -799,7 +693,7 @@ class Article(Base, PRBase):
 
         sub_query = db(ArticlePortalDivision, status=ArticlePortalDivision.STATUSES['PUBLISHED'], **kwargs). \
             order_by(ArticlePortalDivision.publishing_tm.desc()).filter(
-                text(' "publishing_tm" < clock_timestamp() '))
+            text(' "publishing_tm" < clock_timestamp() '))
 
         if portal_id:
             sub_query = sub_query.join(PortalDivision).join(Portal).filter(Portal.id == portal_id)
@@ -810,6 +704,38 @@ class Article(Base, PRBase):
                            ArticlePortalDivision.short.ilike("%" + search_text + "%"),
                            ArticlePortalDivision.long_stripped.ilike("%" + search_text + "%")))
         return sub_query
+
+    @staticmethod
+    def logo_file_properties(article):
+        noimage_url = utils.fileUrl(FOLDER_AND_FILE.no_article_image())
+        return {
+            'browse': article.id,
+            'upload': True,
+            'none': noimage_url,
+            'crop': True,
+            'image_size': [600, 480],
+            'min_size': [100, 80],
+            'aspect_ratio': [300 / 240., 300 / 240.],
+            'preset_urls': {},
+            'no_selection_url': noimage_url
+        }
+
+    @staticmethod
+    def get_image_client_side_dict(article):
+        return article.get_image_cropped_file(Article.logo_file_properties(article),
+                                              db(ImageCroped, croped_image_id=article.image_file_id).first())
+
+    @staticmethod
+    def set_image_client_side_dict(article, client_data):
+        if client_data['selected_by_user']['type'] == 'preset':
+            client_data['selected_by_user'] = {'type': 'none'}
+        if not article.company:
+            folder_id = Company.get(article.company_id).system_folder_file_id
+        else:
+            folder_id = article.company.system_folder_file_id
+        article.image_file_id = article.set_image_cropped_file(Article.logo_file_properties(article),
+                                                               client_data, article.image_file_id, folder_id)
+        return article
 
     # @staticmethod
     # def get_articles_for_portal(page_size, portal_division_id,
@@ -845,9 +771,19 @@ class Article(Base, PRBase):
 
     @staticmethod
     def get_material_grid_data(material):
+        from ..models.rights import PublishUnpublishInPortal
         dict = material.get_client_side_dict(fields='md_tm,title,editor.profireader_name,id')
         dict.update({'portal.name': None if len(material.portal_article) == 0 else '', 'level': True})
-        list = [portal.get_client_side_dict(fields='portal.name,status, id') for portal in material.portal_article]
+        dict.update({'actions': None if len(material.portal_article) == 0 else '', 'level': True})
+        list = [utils.dict_merge(
+            article_portal.get_client_side_dict(fields='portal.name|host,status, id, portal_division_id'),
+            {'actions':
+                 {'edit': PublishUnpublishInPortal(publication=article_portal,
+                                                   division=article_portal.division, company=material.company)
+                     .actions()[PublishUnpublishInPortal.ACTIONS['EDIT']]
+                  } if article_portal.status != 'SUBMITTED' and article_portal.status != "DELETED" else {}
+             })
+                for article_portal in material.portal_article]
         return dict, list
 
         # for article in articles:
@@ -885,31 +821,82 @@ class ReaderArticlePortalDivision(Base, PRBase):
     user_id = Column(TABLE_TYPES['id_profireader'], ForeignKey('user.id'))
     article_portal_division_id = Column(TABLE_TYPES['id_profireader'], ForeignKey('article_portal_division.id'))
     favorite = Column(TABLE_TYPES['boolean'], default=False)
+    liked = Column(TABLE_TYPES['boolean'], default=False)
 
-    def __init__(self, user_id=None, article_portal_division_id=None, favorite=False):
+    def __init__(self, user_id=None, article_portal_division_id=None, favorite=False, liked=False):
         super(ReaderArticlePortalDivision, self).__init__()
         self.user_id = user_id
         self.article_portal_division_id = article_portal_division_id
         self.favorite = favorite
+        self.liked = liked
 
     @staticmethod
     def add_delete_favorite_user_article(article_portal_division_id, favorite):
-        article = db(ReaderArticlePortalDivision, article_portal_division_id=article_portal_division_id,
-                     user_id=g.user_id).one()
-        article.favorite = True if favorite else False
+        articleReader = db(ReaderArticlePortalDivision, article_portal_division_id=article_portal_division_id,
+                           user_id=g.user.id).first()
+        if not articleReader:
+            articleReader = ReaderArticlePortalDivision.add_to_table_if_not_exists(article_portal_division_id)
+        articleReader.favorite = True if favorite else False
+        articleReader.save()
+        return articleReader.favorite
+
+    @staticmethod
+    def add_delete_liked_user_article(article_portal_division_id, liked):
+        articleReader = db(ReaderArticlePortalDivision, article_portal_division_id=article_portal_division_id,
+                           user_id=g.user.id).first()
+
+        if not articleReader:
+            articleReader = ReaderArticlePortalDivision.add_to_table_if_not_exists(article_portal_division_id)
+        articleReader.liked = False if articleReader.liked else True
+        article_division = ArticlePortalDivision.get(article_portal_division_id)
+        article_division.like_count = article_division.like_count - 1 \
+            if articleReader.liked == False and article_division.like_count != 0 else article_division.like_count + 1
+        article_division.save()
+        articleReader.save()
+        return articleReader.liked
+
+    @staticmethod
+    def count_likes(user_id, article_portal_division_id):
+        article_division = ArticlePortalDivision.get(article_portal_division_id)
+        return article_division.like_count
+
+    @staticmethod
+    def article_is_liked(user_id, article_portal_division_id):
+        reader_article = db(ReaderArticlePortalDivision, user_id=user_id,
+                            article_portal_division_id=article_portal_division_id).first()
+        return reader_article.liked if reader_article else False
 
     @staticmethod
     def article_is_favorite(user_id, article_portal_division_id):
-        reader_article = db(ReaderArticlePortalDivision, user_id=user_id, article_portal_division_id=article_portal_division_id).first()
+        reader_article = db(ReaderArticlePortalDivision, user_id=user_id,
+                            article_portal_division_id=article_portal_division_id).first()
         return reader_article.favorite if reader_article else False
+
+    @staticmethod
+    def get_list_reader_liked(article_portal_division_id):
+        me = db(ReaderArticlePortalDivision, article_portal_division_id=article_portal_division_id, user_id=g.user.id,
+                liked=True).first()
+        limit = 15
+        articles = db(ReaderArticlePortalDivision, article_portal_division_id=article_portal_division_id, liked=True)
+        liked_users = [User.get(article.user_id).profireader_name for article in articles.limit(limit)]
+        if me:
+            if g.user.profireader_name in liked_users:
+                index = liked_users.index(g.user.profireader_name)
+                del liked_users[index]
+            else:
+                del liked_users[-1]
+            liked_users.insert(0, g.user.profireader_name)
+        if articles.count() > limit:
+            liked_users.append('and ' + str((articles.count() - limit)) + ' more...')
+        return liked_users
 
     @staticmethod
     def add_to_table_if_not_exists(article_portal_division_id):
         if not db(ReaderArticlePortalDivision,
-                  user_id=g.user_id, article_portal_division_id=article_portal_division_id).count():
-            reader_add = ReaderArticlePortalDivision(user_id=g.user_id,
-                                                     article_portal_division_id=article_portal_division_id,
-                                                     favorite=False).save()
+                  user_id=g.user.id, article_portal_division_id=article_portal_division_id).count():
+            return ReaderArticlePortalDivision(user_id=g.user.id,
+                                               article_portal_division_id=article_portal_division_id,
+                                               favorite=False).save()
 
     def get_article_portal_division(self):
         return db(ArticlePortalDivision, id=self.article_portal_division_id).one()
@@ -917,9 +904,9 @@ class ReaderArticlePortalDivision(Base, PRBase):
     @staticmethod
     def subquery_favorite_articles():
         return db(ArticlePortalDivision).filter(
-                ArticlePortalDivision.id == db(ReaderArticlePortalDivision,
-                                               user_id=g.user.id,
-                                               favorite=True).subquery().c.article_portal_division_id)
+            ArticlePortalDivision.id == db(ReaderArticlePortalDivision,
+                                           user_id=g.user.id,
+                                           favorite=True).subquery().c.article_portal_division_id)
 
     def get_portal_division(self):
         return db(PortalDivision).filter(PortalDivision.id == db(ArticlePortalDivision,
