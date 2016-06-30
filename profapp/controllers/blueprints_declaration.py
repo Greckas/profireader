@@ -27,11 +27,11 @@ class PrBlueprint(Blueprint):
                     index = options['methods'].index('OK')
                     options['methods'][index] = 'POST'
                     ret = ok(f)
-                    ret = function_profiler(ret)
+                    # ret = function_profiler(ret)
                     self.bluprints[self.name] = {}
                     self.bluprints[self.name][ret.__name__] = ret
                 else:
-                    ret = function_profiler(ret)
+                    # ret = function_profiler(ret)
                     self.bluprints[self.name] = {}
                     self.bluprints[self.name][ret.__name__] = ret
             endpoint = options.pop("endpoint", ret.__name__)
@@ -57,6 +57,7 @@ tools_bp = PrBlueprint('tools', __name__)
 help_bp = PrBlueprint('help', __name__)
 reader_bp = PrBlueprint('reader', __name__)
 messenger_bp = PrBlueprint('messenger', __name__)
+tutorial_bp = PrBlueprint('tutorial', __name__)
 # reader_bp = Blueprint('reader', __name__)
 
 
