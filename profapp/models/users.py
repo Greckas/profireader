@@ -270,10 +270,7 @@ class User(Base, UserMixin, PRBase):
             return "Sorry!You must be confirmed!"
         return True
 
-
-
     def validate(self, is_new):
-
         ret = super().validate(is_new)
         if (self.omit_validation):
             return ret

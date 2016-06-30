@@ -37,7 +37,8 @@ def get_division_for_subportal(portal_id, member_company_id):
     if (len(PortalDivisionSettings)):
         return PortalDivisionSettings[0].portal_division
     else:
-        return g.db().query(PortalDivision).filter_by(portal_id=portal_id, portal_division_type_id='catalog').one()
+        return g.db().query(PortalDivision).filter_by(portal_id=portal_id,
+                                                      portal_division_type_id='index').one()
 
 
 @front_bp.route('subscribe_to_portal/')
@@ -50,6 +51,7 @@ def subscribe_to_portal():
             redirect(url_for('reader.list_reader'))
         else:
             url = '//profireader.com/subscribe/' + portal.id
+            print(url)
             redirect(url)
     return ''
 

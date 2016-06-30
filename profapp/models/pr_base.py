@@ -24,7 +24,6 @@ from collections import OrderedDict
 import base64
 from PIL import Image
 from io import BytesIO
-
 from ..utils import fileUrl, fileID
 from sqlalchemy.ext.associationproxy import association_proxy, AssociationProxy
 
