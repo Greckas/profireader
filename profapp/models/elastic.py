@@ -1,8 +1,9 @@
-import requests
 import json
 import math
 from .. import utils
 from utils.db_utils import db
+import requests
+import inspect
 from sqlalchemy import event
 
 
@@ -10,6 +11,11 @@ from sqlalchemy import event
 # db_session = scoped_session(sessionmaker(autocommit=False,
 #                                          autoflush=False,
 #                                          bind=engine))
+
+class PRElasticException(Exception):
+    def __init__(self, message, response):
+        self.message = 'Elastic search error (status_code = ' + response.status_code.__str__() + '): ' + message.__str__()
+
 
 class PRElasticConnection:
     host = None
@@ -21,9 +27,11 @@ class PRElasticConnection:
         return (self.host + '/' + '/'.join(args)) + '?' + \
                ('&'.join(["%s=%s" % (k, v) for k, v in params.items()]) if params else '')
 
-    def rq(self, path='', req='', method='GET', returnstatusonly=False):
-        print(method + ' - ' + path)
-        print(req)
+    def rq(self, path='', req='', method='GET', returnstatusonly=False, notjson=False):
+        import sys
+
+        print(method + ' - ' + path + ' called from ' + sys._getframe(1).f_code.co_name)
+        print('------ request = `' + req.__str__() + '`')
         if method == 'POST':
             response = requests.post(path, data=json.dumps(req))
         elif method == 'PUT':
@@ -37,60 +45,68 @@ class PRElasticConnection:
         else:
             raise Exception("unknown method `" + method + '`')
         if returnstatusonly:
-            print('----------', response.status_code, '----------')
+            print('++++++ response(header only) =`' + response.status_code.__str__() + '`')
             return True if response.status_code == 200 else False
         else:
-            print('++++++++++', response.text, '++++++++++')
-            return json.loads(response.text)
+            print('++++++ response(header) =`' + response.status_code.__str__() + '`')
+            if response.status_code > 299:
+                ret = json.loads(response.text)
+                raise PRElasticException(ret['error'], response)
+            print('++++++ response(text) =`' + response.text + '`')
+            return response.text if notjson else json.loads(response.text)
 
     def index_exists(self, index_name):
         return self.rq(path=self.path(index_name), req={}, method='HEAD', returnstatusonly=True)
 
     def doctype_exists(self, index_name, doctype_name):
         ret = self.rq(path=self.path(index_name, '_mapping', doctype_name), req={}, method='GET')
-        return True if len(ret.keys()) > 0 else False
+        #          return True if len(ret.keys()) > 0 else False
+        #     def doc_exists(self, indexname, doctype, id):
+        #         return PRElastic.rq(path=PRElastic.path(indexname, doctype, id), req={}, method='HEAD', returnstatusonly=True)
+        #
+        #     def doc_delete(self, indexname, doctype, id):
+        #         return PRElastic.rq(path=PRElastic.path(indexname, doctype, id), req={}, method='DELETE')
+        #
+        #     def doctype_exists(self, indexname, doctype):
+        #          ret = PRElastic.rq(path=PRElastic.path(indexname, '_mapping', doctype), req={}, method='GET')
+        #          return True if len(ret.keys()) > 0 else False
 
-    def doc_exists(self, indexname, doctype, id):
-        return PRElasticConnection.rq(path=PRElasticConnection.path(indexname, doctype, id), req={}, method='HEAD', returnstatusonly=True)
+    def replace_document(self, index_name, document_type, id, document):
+        return self.rq(path=self.path(index_name, document_type, id), req=document, method='PUT')
 
-    def doc_delete(self, indexname, doctype, id):
-        return PRElasticConnection.rq(path=PRElasticConnection.path(indexname, doctype, id), req={}, method='DELETE')
+    def remove_all_indexes(self):
+        return self.rq(path=self.path('_all'), req={}, method='DELETE')
 
-    def doctype_exists(self, indexname, doctype):
-        ret = PRElasticConnection.rq(path=PRElasticConnection.path(indexname, '_mapping', doctype), req={}, method='GET')
-        return True if len(ret.keys()) > 0 else False
+    def show_all_indexes(self):
+        return self.rq(path=self.path('_cat', 'indices'), req={}, method='GET', notjson=True)
 
+    def remove_index(self, index_name):
+        return self.rq(path=self.path(index_name), req={}, method='DELETE')
 
-def replace_document(self, index_name, document_type, id, document):
-    return self.rq(path=self.path(index_name, document_type, id), req=document, method='PUT')
+    def search(self, index_name, document_type, sort=["_score"], filter=[], must=[], should=[], page=1,
+               items_per_page=10):
 
+        req = {
+            "sort": sort,
+            "query": {"bool": {"filter": filter, "must": must, "should": should}}}
 
-def remove_index(self, index_name):
-    return self.rq(path=self.path(index_name), req={}, method='DELETE')
+        count = self.rq(path=self.path(index_name, document_type, '_count'),
+                        req=req, method='GET')['count']
 
+        pages = int(math.ceil(count / items_per_page))
 
-def search(self, index_name, document_type, sort=["_score"], filter=[], must=[], should=[], page=1, items_per_page=10):
-    req = {
-        "sort": sort,
-        "query": {"bool": {"filter": filter, "must": must, "should": should}}}
+        p = utils.putInRange(page, 1, pages)
+        p = 1 if p == 0 else p
+        print(page, p, pages)
+        items = utils.putInRange(items_per_page, 1, 100)
 
-    count = self.rq(path=self.path(index_name, document_type, '_count'),
-                    req=req, method='GET')['count']
+        res = self.rq(
+            path=self.path(index_name, document_type, '_search', params={'size': items,
+                                                                         'from': (p - 1) * items}),
+            req=req, method='GET')
+        found = [h['_source'] for h in res['hits']['hits']]
 
-    pages = int(math.ceil(count / items_per_page))
-
-    p = utils.putInRange(page, 1, pages)
-    p = 1 if p == 0 else p
-    print(page, p, pages)
-    items = utils.putInRange(items_per_page, 1, 100)
-
-    res = self.rq(
-        path=self.path(index_name, document_type, '_search', params={'size': items,
-                                                                     'from': (p - 1) * items}),
-        req=req, method='GET')
-    found = [h['_source'] for h in res['hits']['hits']]
-
-    return (found, pages, p)
+        return (found, pages, p)
 
 
 elasticsearch = PRElasticConnection('http://elastic.profi:9200')
@@ -178,7 +194,7 @@ class PRElasticField:
     boost = ''
     setter = None
 
-    def __init__(self, ftype='string', boost=1, analyzed=None, setter=lambda *args: ''):
+    def __init__(self, setter, ftype='string', boost=1, analyzed=None):
         self.type = ftype
         self.boost = boost
         self.analyzed = ('analyzed' if self.type == 'string' else 'not_analyzed') if analyzed is None else analyzed
