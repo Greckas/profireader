@@ -192,8 +192,7 @@
                         name: 'position',
                         onclick: 'change_position',
                         width: '20%', afilter: {type: 'input'}
-                    }
-                    ,
+                    },
                     {name: 'status', width: '10%', afilter: {type: 'input'}},
                     {
                         name: 'rights',
@@ -203,6 +202,15 @@
                         classes: function (id, entity, field) {
                             return entity.status !== 'ACTIVE' ? 'non-active' : '';
                         }
+                    },{
+                        name: 'profireader_email',
+                        onclick: 'change_position',
+                        width: '20%', afilter: {type: 'input'}
+                    },
+                    {
+                        name: 'profireader_phone',
+                        onclick: 'change_position',
+                        width: '20%', afilter: {type: 'input'}
                     },
                     {
                         name: 'actions', width: '*', type: 'actions',
@@ -218,7 +226,6 @@
         })
         {% endraw %}
     </script>
-    {{ json }}
     <div ng-controller="company_employees_controller">
         {% raw %}
         <h2>{{ _('Employees at company `%(company.name)s`') }}</h2>
